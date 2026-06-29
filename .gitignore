@@ -1,0 +1,3 @@
+# Local Docker data directories
+/minio/
+/mysql/
