@@ -1,14 +1,18 @@
 package com.example.server.service;
 
+import com.alibaba.fastjson2.JSON;
 import com.example.server.entity.KnowledgeChunk;
 import com.example.server.mapper.KnowledgeChunkMapper;
+import com.example.server.utils.EmbeddingUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.List;
 
 @Service
 public class KnowledgeChunkService {
@@ -18,6 +22,12 @@ public class KnowledgeChunkService {
 
     @Autowired
     private KnowledgeChunkMapper knowledgeChunkMapper;
+
+    @Autowired
+    private EmbeddingUtils embeddingUtils;
+
+    @Value("${ai.embedding.model:BAAI/bge-m3}")
+    private String embeddingModel;
 
     public int splitAndSave(Long documentId, Long userId, String content) {
         if (content == null || content.isBlank()) {
@@ -31,6 +41,8 @@ public class KnowledgeChunkService {
             String chunkText = content.substring(start, end).trim();
 
             if (!chunkText.isBlank()) {
+                List<Double> vector = embeddingUtils.embed(chunkText);
+
                 KnowledgeChunk chunk = new KnowledgeChunk();
                 chunk.setDocumentId(documentId);
                 chunk.setUserId(userId);
@@ -38,6 +50,9 @@ public class KnowledgeChunkService {
                 chunk.setContent(chunkText);
                 chunk.setContentHash(sha256(chunkText));
                 chunk.setCharCount(chunkText.length());
+                chunk.setEmbedding(JSON.toJSONString(vector));
+                chunk.setEmbeddingModel(embeddingModel);
+                chunk.setEmbeddingDim(vector.size());
                 knowledgeChunkMapper.insert(chunk);
                 chunkCount++;
             }
