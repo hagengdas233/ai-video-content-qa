@@ -24,7 +24,10 @@ public class KnowledgeQaService {
             throw new IllegalArgumentException("question is required");
         }
 
-        List<Map<String, Object>> sources = knowledgeRetrievalService.search(userId, question, topK);
+        List<Map<String, Object>> sources = knowledgeRetrievalService.search(userId, question, topK)
+                .stream()
+                .filter(this::isRelevant)
+                .toList();
         String answer;
         if (sources.isEmpty()) {
             answer = NO_ANSWER;
@@ -36,6 +39,11 @@ public class KnowledgeQaService {
         result.put("answer", answer);
         result.put("sources", sources);
         return result;
+    }
+
+    private boolean isRelevant(Map<String, Object> source) {
+        Object score = source.get("score");
+        return score instanceof Number number && number.doubleValue() >= KnowledgeRetrievalService.MIN_SCORE;
     }
 
     private String buildPrompt(String question, List<Map<String, Object>> sources) {

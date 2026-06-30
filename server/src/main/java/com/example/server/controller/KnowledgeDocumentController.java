@@ -5,7 +5,9 @@ import com.example.server.service.KnowledgeDocumentService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -48,6 +50,21 @@ public class KnowledgeDocumentController {
     public List<KnowledgeDocument> list(@RequestParam(value = "userId", required = false) Long userId) {
         Long currentUserId = resolveUserId(userId);
         return knowledgeDocumentService.listByUser(currentUserId);
+    }
+
+    @DeleteMapping("/document/{documentId}")
+    public ResponseEntity<?> delete(@PathVariable Long documentId,
+                                    @RequestParam(value = "userId", required = false) Long userId) {
+        try {
+            Long currentUserId = resolveUserId(userId);
+            knowledgeDocumentService.deleteDocument(documentId, currentUserId);
+            return ResponseEntity.ok("删除成功");
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(500).body("Delete failed: " + e.getMessage());
+        }
     }
 
     private Long resolveUserId(Long userId) {

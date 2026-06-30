@@ -1,12 +1,15 @@
 package com.example.server.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.example.server.entity.KnowledgeChunk;
 import com.example.server.entity.KnowledgeDocument;
+import com.example.server.mapper.KnowledgeChunkMapper;
 import com.example.server.mapper.KnowledgeDocumentMapper;
 import com.example.server.utils.MinioUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.charset.StandardCharsets;
@@ -18,6 +21,9 @@ public class KnowledgeDocumentService {
 
     @Autowired
     private KnowledgeDocumentMapper knowledgeDocumentMapper;
+
+    @Autowired
+    private KnowledgeChunkMapper knowledgeChunkMapper;
 
     @Autowired
     private KnowledgeChunkService knowledgeChunkService;
@@ -86,6 +92,36 @@ public class KnowledgeDocumentService {
         query.eq("user_id", userId);
         query.orderByDesc("id");
         return knowledgeDocumentMapper.selectList(query);
+    }
+
+    @Transactional
+    public void deleteDocument(Long documentId, Long userId) {
+        if (documentId == null) {
+            throw new IllegalArgumentException("documentId is required");
+        }
+        if (userId == null) {
+            throw new IllegalArgumentException("userId is required");
+        }
+
+        KnowledgeDocument document = knowledgeDocumentMapper.selectById(documentId);
+        if (document == null || !userId.equals(document.getUserId())) {
+            throw new IllegalArgumentException("知识库文档不存在或无权限删除");
+        }
+
+        QueryWrapper<KnowledgeChunk> chunkQuery = new QueryWrapper<>();
+        chunkQuery.eq("document_id", documentId).eq("user_id", userId);
+        knowledgeChunkMapper.delete(chunkQuery);
+
+        QueryWrapper<KnowledgeDocument> documentQuery = new QueryWrapper<>();
+        documentQuery.eq("id", documentId).eq("user_id", userId);
+        int deleted = knowledgeDocumentMapper.delete(documentQuery);
+        if (deleted <= 0) {
+            throw new IllegalStateException("知识库文档删除失败");
+        }
+
+        if (document.getMinioObjectKey() != null && !document.getMinioObjectKey().isBlank()) {
+            minioUtils.removeFile(document.getMinioObjectKey());
+        }
     }
 
     private String readText(MultipartFile file) throws Exception {

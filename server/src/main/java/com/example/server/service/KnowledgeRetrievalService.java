@@ -16,6 +16,7 @@ import java.util.Map;
 public class KnowledgeRetrievalService {
 
     private static final int DEFAULT_TOP_K = 5;
+    public static final double MIN_SCORE = 0.45;
 
     @Autowired
     private KnowledgeChunkMapper knowledgeChunkMapper;
@@ -44,6 +45,7 @@ public class KnowledgeRetrievalService {
                         (Double) right.get("score"),
                         (Double) left.get("score")
                 ))
+                .filter(result -> (Double) result.get("score") >= MIN_SCORE)
                 .limit(limit)
                 .toList();
     }

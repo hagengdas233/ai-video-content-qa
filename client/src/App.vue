@@ -6,9 +6,11 @@
     <header class="navbar">
       <div class="nav-content">
         <div class="brand">
-          <span class="brand-do">DO</span>
-          <span class="brand-video">Video</span>
-          <span class="beta-badge">PRO</span>
+          <div class="brand-mark">AI</div>
+          <div class="brand-copy">
+            <span class="brand-title">AI 视频解析问答平台</span>
+            <span class="brand-subtitle">视频解析 · 文档知识库 · RAG 问答</span>
+          </div>
         </div>
 
         <div class="nav-controls">
@@ -35,233 +37,285 @@
     </header>
 
     <main class="main-container">
-      <section class="hero-section">
-        <h1 class="slogan-main">DECODE YOUR VIDEO</h1>
-        <p class="slogan-sub">影视重构 · 算力赋能</p>
+      <section class="console-intro">
+        <div>
+          <p class="eyebrow">CONTENT INTELLIGENCE CONSOLE</p>
+          <h1>AI 视频解析与知识库问答平台</h1>
+          <p class="intro-subtitle">上传视频或文档，完成转写、总结、检索与问答</p>
+        </div>
+        <div class="intro-metrics">
+          <span>视频任务：{{ list.length }}</span>
+          <span>知识库文档：{{ ragDocuments.length }}</span>
+        </div>
+      </section>
 
-        <div class="upload-wrapper">
-          <input
-              type="file"
-              id="file-input"
-              @change="handleFileChange"
-              accept="video/*"
-              hidden
-          />
+      <div class="workspace-tabs">
+        <button
+            class="workspace-tab"
+            :class="{ active: activeWorkspace === 'video' }"
+            @click="activeWorkspace = 'video'"
+        >
+          视频内容解析
+        </button>
+        <button
+            class="workspace-tab"
+            :class="{ active: activeWorkspace === 'rag' }"
+            @click="activeWorkspace = 'rag'"
+        >
+          知识库问答
+        </button>
+      </div>
 
-          <div
-              class="upload-magnet"
-              :class="{ 'processing': uploading, 'is-dragover': isDragOver }"
-              @dragover.prevent="isDragOver = true"
-              @dragleave.prevent="isDragOver = false"
-              @drop.prevent="handleDrop"
-          >
-            <div class="split-container" v-if="!uploading">
+      <transition name="toast-pop">
+        <div v-if="message" class="notification-bar" :class="{ 'error': message.startsWith('❌') || message.startsWith('⚠️') }">
+          {{ message }}
+        </div>
+      </transition>
 
-              <label for="file-input" class="skew-pane pane-local">
-                <div class="pane-content unskew">
-                  <div class="magnet-icon">
-                    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                  </div>
-                  <span class="magnet-title">LOCAL FILE</span>
-                  <span class="magnet-desc">{{ isDragOver ? '松手上传' : '点击 / 拖拽本地文件' }}</span>
+      <div class="workbench-shell">
+        <div class="workbench-main">
+          <section v-show="activeWorkspace === 'video'" class="video-workspace">
+            <section class="hero-section">
+              <div class="section-header">
+                <div>
+                  <p class="panel-kicker">VIDEO UNDERSTANDING</p>
+                  <h3>视频内容解析</h3>
                 </div>
-              </label>
+                <div class="count-chip">{{ list.length }} 个任务</div>
+              </div>
 
-              <div class="split-gap"></div>
+              <div class="upload-wrapper">
+                <input
+                    type="file"
+                    id="file-input"
+                    @change="handleFileChange"
+                    accept="video/*"
+                    hidden
+                />
 
-              <div class="skew-pane pane-url">
-                <div class="pane-content unskew">
-                  <div class="magnet-icon">
-                    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                <div
+                    class="upload-magnet"
+                    :class="{ 'processing': uploading, 'is-dragover': isDragOver }"
+                    @dragover.prevent="isDragOver = true"
+                    @dragleave.prevent="isDragOver = false"
+                    @drop.prevent="handleDrop"
+                >
+                  <div class="split-container" v-if="!uploading">
+
+                    <label for="file-input" class="skew-pane pane-local">
+                      <div class="pane-content unskew">
+                        <div class="magnet-icon">
+                          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        </div>
+                        <span class="magnet-title">LOCAL FILE</span>
+                        <span class="magnet-desc">{{ isDragOver ? '松手上传' : '点击 / 拖拽本地视频' }}</span>
+                      </div>
+                    </label>
+
+                    <div class="split-gap"></div>
+
+                    <div class="skew-pane pane-url">
+                      <div class="pane-content unskew">
+                        <div class="magnet-icon">
+                          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                        </div>
+                        <span class="magnet-title">WEB LINK</span>
+                        <span class="magnet-desc">B站 / YouTube / 抖音</span>
+
+                        <div class="url-input-box" @click.stop>
+                          <input
+                              v-model="videoUrl"
+                              type="text"
+                              placeholder="粘贴视频链接..."
+                              @keyup.enter="handleUrlUpload"
+                          />
+                          <button class="url-go-btn" @click="handleUrlUpload">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
                   </div>
-                  <span class="magnet-title">WEB LINK</span>
-                  <span class="magnet-desc">B站 / YouTube / 抖音</span>
 
-                  <div class="url-input-box" @click.stop>
-                    <input
-                        v-model="videoUrl"
-                        type="text"
-                        placeholder="粘贴视频链接..."
-                        @keyup.enter="handleUrlUpload"
-                    />
-                    <button class="url-go-btn" @click="handleUrlUpload">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                  <div class="magnet-content busy" v-else>
+                    <div class="quantum-loader"></div>
+                    <span class="busy-text">正在建立通道并解析资源...</span>
+                  </div>
+
+                  <div class="border-glow"></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="workspace-section">
+              <div class="section-header">
+                <div>
+                  <p class="panel-kicker">TASK QUEUE</p>
+                  <h3>视频任务列表</h3>
+                </div>
+                <div class="count-chip">{{ list.length }} 个任务</div>
+              </div>
+              <div v-if="list.length === 0" class="empty-state">暂无视频任务，上传视频后会在这里显示解析队列。</div>
+              <div v-else class="card-grid">
+                <div v-for="item in list" :key="item.id" class="project-card">
+
+                  <button class="delete-btn" @click.stop="deleteItem(item)" title="删除此项">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                  <div class="card-meta">
+                    <div class="meta-icon">
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+                    </div>
+                    <div class="meta-info">
+                      <div class="filename-mask" :title="item.filename">{{ item.filename }}</div>
+                      <div class="meta-tags">
+                        <span class="time-tag">{{ formatTime(item.uploadTime) }}</span>
+                        <span class="status-indicator" :class="item.status.toLowerCase()">
+                          {{ item.status === 'COMPLETED' ? 'READY' : 'PROCESSING' }}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="action-dock">
+                    <button class="dock-item" @click="downloadAudio(item)">
+                      <span class="item-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                      </span>
+                      <span class="item-label">下载音频</span>
+                    </button>
+
+                    <button
+                        class="dock-item"
+                        :disabled="item.status !== 'COMPLETED'"
+                        @click="transcribe(item.id)"
+                    >
+                      <span class="item-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                      </span>
+                      <span class="item-label">提取文字</span>
+                    </button>
+
+                    <button
+                        class="dock-item ai-core"
+                        :disabled="item.status !== 'COMPLETED'"
+                        @click="aiAnalyze(item.id)"
+                    >
+                      <span class="item-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
+                      </span>
+                      <div class="label-group">
+                        <span class="item-label">AI 总结</span>
+                      </div>
+                      <div class="shimmer"></div>
                     </button>
                   </div>
                 </div>
               </div>
+            </section>
+          </section>
 
-            </div>
-
-            <div class="magnet-content busy" v-else>
-              <div class="quantum-loader"></div>
-              <span class="busy-text">正在建立通道并解析资源...</span>
-            </div>
-
-            <div class="border-glow"></div>
-          </div>
-        </div>
-        <transition name="toast-pop">
-          <div v-if="message" class="notification-bar" :class="{ 'error': message.startsWith('❌') || message.startsWith('⚠️') }">
-            {{ message }}
-          </div>
-        </transition>
-      </section>
-
-      <section v-if="list.length > 0" class="workspace-section">
-        <div class="section-header"><h3>工作台</h3><div class="count-chip">{{ list.length }} TASKS</div></div>
-        <div class="card-grid">
-          <div v-for="item in list" :key="item.id" class="project-card">
-
-            <button class="delete-btn" @click.stop="deleteItem(item)" title="删除此项">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </svg>
-            </button>
-            <div class="card-meta">
-              <div class="meta-icon">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+          <section v-show="activeWorkspace === 'rag'" class="rag-section">
+            <div class="section-header">
+              <div>
+                <p class="panel-kicker">RETRIEVAL AUGMENTED QA</p>
+                <h3>知识库 / RAG 问答</h3>
               </div>
-              <div class="meta-info">
-                <div class="filename-mask" :title="item.filename">{{ item.filename }}</div>
-                <div class="meta-tags">
-                  <span class="time-tag">{{ formatTime(item.uploadTime) }}</span>
-                  <span class="status-indicator" :class="item.status.toLowerCase()">
-                    {{ item.status === 'COMPLETED' ? 'READY' : 'PROCESSING' }}
-                  </span>
+              <div class="count-chip">用户 1</div>
+            </div>
+
+            <div class="rag-layout">
+              <div class="rag-panel">
+                <div class="rag-panel-title">文档上传</div>
+                <div class="rag-upload-row">
+                  <input
+                      type="file"
+                      accept=".txt,.md"
+                      class="rag-file-input"
+                      @change="handleRagFileChange"
+                  />
+                  <button class="rag-action-btn" :disabled="ragUploading || !ragFile" @click="uploadRagDocument">
+                    {{ ragUploading ? '上传中...' : '上传文档' }}
+                  </button>
+                  <button class="rag-action-btn ghost" :disabled="ragListLoading" @click="fetchRagDocuments">
+                    {{ ragListLoading ? '加载中...' : '刷新列表' }}
+                  </button>
+                </div>
+                <p v-if="ragMessage" class="rag-message" :class="{ error: ragError }">{{ ragMessage }}</p>
+
+                <div class="rag-doc-list">
+                  <div v-if="ragDocuments.length === 0" class="rag-empty">暂无知识库文档</div>
+                  <div v-for="doc in ragDocuments" :key="doc.id" class="rag-doc-item">
+                    <div class="rag-doc-main">
+                      <span class="rag-doc-name" :title="doc.originalFilename">{{ doc.originalFilename }}</span>
+                      <div class="rag-doc-actions">
+                        <span class="rag-doc-status" :class="(doc.status || '').toLowerCase()">{{ doc.status }}</span>
+                        <button class="rag-delete-btn" @click="deleteRagDocument(doc)">删除</button>
+                      </div>
+                    </div>
+                    <div class="rag-doc-meta">
+                      <span>{{ doc.chunkCount || 0 }} chunks</span>
+                      <span>{{ formatTime(doc.createTime) }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
+
+              <div class="rag-panel">
+                <div class="rag-panel-title">知识库提问</div>
+                <textarea
+                    v-model="ragQuestion"
+                    class="rag-question"
+                    placeholder="输入你的问题，例如：Spring Boot 是什么？"
+                ></textarea>
+                <button class="rag-action-btn ask" :disabled="ragAsking || !ragQuestion.trim()" @click="askRag">
+                  {{ ragAsking ? '检索并生成中...' : '提问' }}
+                </button>
+              </div>
             </div>
+          </section>
+        </div>
 
-            <div class="action-dock">
-              <button class="dock-item" @click="downloadAudio(item)">
-                <span class="item-icon">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-                </span>
-                <span class="item-label">下载音频</span>
-              </button>
-
-              <button
-                  class="dock-item"
-                  :disabled="item.status !== 'COMPLETED'"
-                  @click="transcribe(item.id)"
-              >
-                <span class="item-icon">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-                </span>
-                <span class="item-label">提取文字</span>
-              </button>
-
-              <button
-                  class="dock-item ai-core"
-                  :disabled="item.status !== 'COMPLETED'"
-                  @click="aiAnalyze(item.id)"
-              >
-                <span class="item-icon">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
-                </span>
-                <div class="label-group">
-                  <span class="item-label">AI 智能总结</span>
-                </div>
-                <div class="shimmer"></div>
-              </button>
+        <aside class="result-panel" :class="{ 'has-result': sidebar.visible }">
+          <div class="sidebar-header">
+            <div class="sidebar-title">
+              <span class="icon" v-if="sidebar.type === 'ai' || sidebar.type === 'rag'">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="M20.2 6.47l-1.4 1.4"></path><path d="M15.9 5.35l-1.4-1.4"></path><path d="M9 11a3 3 0 1 0 6 0a3 3 0 0 0-6 0"></path></svg>
+              </span>
+              <span class="icon" v-else>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+              </span>
+              {{ sidebar.visible ? sidebar.title : 'AI 结果面板' }}
             </div>
+            <button v-if="sidebar.visible" class="close-btn" @click="closeSidebar">×</button>
           </div>
-        </div>
-      </section>
-
-      <section class="rag-section">
-        <div class="section-header">
-          <h3>知识库 / RAG 问答</h3>
-          <div class="count-chip">USER 1</div>
-        </div>
-
-        <div class="rag-layout">
-          <div class="rag-panel">
-            <div class="rag-panel-title">文档上传</div>
-            <div class="rag-upload-row">
-              <input
-                  type="file"
-                  accept=".txt,.md"
-                  class="rag-file-input"
-                  @change="handleRagFileChange"
-              />
-              <button class="rag-action-btn" :disabled="ragUploading || !ragFile" @click="uploadRagDocument">
-                {{ ragUploading ? '上传中...' : '上传文档' }}
-              </button>
-              <button class="rag-action-btn ghost" :disabled="ragListLoading" @click="fetchRagDocuments">
-                {{ ragListLoading ? '加载中...' : '刷新列表' }}
-              </button>
+          <div class="sidebar-body">
+            <div v-if="!sidebar.visible" class="result-empty">
+              <div class="result-empty-icon">AI</div>
+              <p>选择视频任务生成总结，或在知识库中提问，AI 结果会显示在这里。</p>
             </div>
-            <p v-if="ragMessage" class="rag-message" :class="{ error: ragError }">{{ ragMessage }}</p>
+            <div v-else-if="sidebar.loading" class="loading-state"><div class="quantum-loader small"></div><p>数据流处理中...</p></div>
+            <div v-else>
+              <div v-if="sidebar.type === 'ai' || sidebar.type === 'rag'" class="markdown-content" v-html="renderedMarkdown"></div>
+              <div v-else class="text-content"><pre>{{ sidebar.content }}</pre></div>
 
-            <div class="rag-doc-list">
-              <div v-if="ragDocuments.length === 0" class="rag-empty">暂无知识库文档</div>
-              <div v-for="doc in ragDocuments" :key="doc.id" class="rag-doc-item">
-                <div class="rag-doc-main">
-                  <span class="rag-doc-name" :title="doc.originalFilename">{{ doc.originalFilename }}</span>
-                  <span class="rag-doc-status" :class="(doc.status || '').toLowerCase()">{{ doc.status }}</span>
-                </div>
-                <div class="rag-doc-meta">
-                  <span>{{ doc.chunkCount || 0 }} chunks</span>
-                  <span>{{ formatTime(doc.createTime) }}</span>
-                </div>
+              <div v-if="sidebar.type === 'rag' && ragSources.length > 0" class="result-sources">
+                <div class="rag-result-title">SOURCES</div>
+                <details v-for="source in ragSources" :key="source.chunkId" class="rag-source-item" open>
+                  <summary>
+                    chunk #{{ source.chunkIndex }}
+                    <span>score {{ formatScore(source.score) }}</span>
+                  </summary>
+                  <pre>{{ source.content }}</pre>
+                </details>
               </div>
             </div>
           </div>
-
-          <div class="rag-panel">
-            <div class="rag-panel-title">知识库提问</div>
-            <textarea
-                v-model="ragQuestion"
-                class="rag-question"
-                placeholder="输入你的问题，例如：Spring Boot 是什么？"
-            ></textarea>
-            <button class="rag-action-btn ask" :disabled="ragAsking || !ragQuestion.trim()" @click="askRag">
-              {{ ragAsking ? '检索并生成中...' : '提问' }}
-            </button>
-
-            <div v-if="ragAnswer" class="rag-answer">
-              <div class="rag-result-title">ANSWER</div>
-              <p>{{ ragAnswer }}</p>
-            </div>
-
-            <div v-if="ragSources.length > 0" class="rag-sources">
-              <div class="rag-result-title">SOURCES</div>
-              <details v-for="source in ragSources" :key="source.chunkId" class="rag-source-item" open>
-                <summary>
-                  chunk #{{ source.chunkIndex }}
-                  <span>score {{ formatScore(source.score) }}</span>
-                </summary>
-                <pre>{{ source.content }}</pre>
-              </details>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <div class="sidebar-backdrop" v-if="sidebar.visible" @click="closeSidebar"></div>
-      <div class="sidebar-panel" :class="{ 'is-open': sidebar.visible }">
-        <div class="sidebar-header">
-          <div class="sidebar-title">
-            <span class="icon" v-if="sidebar.type === 'ai'">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="M20.2 6.47l-1.4 1.4"></path><path d="M15.9 5.35l-1.4-1.4"></path><path d="M9 11a3 3 0 1 0 6 0a3 3 0 0 0-6 0"></path></svg>
-            </span>
-            <span class="icon" v-else>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-            </span>
-            {{ sidebar.title }}
-          </div>
-          <button class="close-btn" @click="closeSidebar">×</button>
-        </div>
-        <div class="sidebar-body">
-          <div v-if="sidebar.loading" class="loading-state"><div class="quantum-loader small"></div><p>数据流处理中...</p></div>
-          <div v-else>
-            <div v-if="sidebar.type === 'ai'" class="markdown-content" v-html="renderedMarkdown"></div>
-            <div v-else class="text-content"><pre>{{ sidebar.content }}</pre></div>
-          </div>
-        </div>
+        </aside>
       </div>
 
       <div v-if="showAuthModal" class="auth-backdrop">
@@ -312,6 +366,7 @@ const message = ref('')
 const uploading = ref(false)
 const list = ref([])
 const isDragOver = ref(false)
+const activeWorkspace = ref('video')
 const sidebar = ref({ visible: false, type: 'ai', title: '', content: '', loading: false })
 const currentUser = ref(null)
 const showAuthModal = ref(false)
@@ -561,12 +616,41 @@ const fetchRagDocuments = async () => {
   }
 }
 
+const deleteRagDocument = async (doc) => {
+  if (!doc || !doc.id) return
+  if (!confirm(`确认删除知识库文档 "${doc.originalFilename}" 吗？`)) return
+
+  try {
+    const res = await fetch(`http://localhost:9090/knowledge/document/${doc.id}?userId=${ragUserId}`, {
+      method: 'DELETE'
+    })
+    const text = await res.text()
+    if (!res.ok) throw new Error(text || '删除失败')
+
+    showRagMsg('删除成功')
+    const shouldClearResult = ragSources.value.some(source => Number(source.documentId) === Number(doc.id))
+    if (shouldClearResult) {
+      ragAnswer.value = ''
+      ragSources.value = []
+      sidebar.value.visible = false
+      sidebar.value.loading = false
+      sidebar.value.content = ''
+    }
+    await fetchRagDocuments()
+  } catch (error) {
+    console.error(error)
+    showRagMsg('删除失败：' + error.message, true)
+  }
+}
+
 const askRag = async () => {
   if (!ragQuestion.value.trim()) return
   ragAsking.value = true
   ragAnswer.value = ''
   ragSources.value = []
   showRagMsg('')
+  openSidebar('rag', 'RAG 问答结果')
+  sidebar.value.content = '正在检索知识库并生成回答...'
 
   try {
     const res = await fetch('http://localhost:9090/knowledge/ask', {
@@ -583,10 +667,14 @@ const askRag = async () => {
     const data = JSON.parse(text)
 
     ragAnswer.value = data.answer || ''
-    ragSources.value = data.sources || []
+    ragSources.value = Array.isArray(data.sources) ? data.sources : []
+    sidebar.value.content = ragAnswer.value || '未生成有效回答'
+    sidebar.value.loading = false
   } catch (error) {
     console.error(error)
     showRagMsg('提问失败：' + error.message, true)
+    sidebar.value.content = '提问失败：' + error.message
+    sidebar.value.loading = false
   } finally {
     ragAsking.value = false
   }
@@ -893,16 +981,17 @@ onMounted(() => {
 @import url('https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Noto+Sans+SC:wght@400;500;700&family=Space+Grotesk:wght@300;500;700&family=Syncopate:wght@700&display=swap');
 
 :root {
-  --bg-deep: #0b0c10;
-  --bg-card: #121418;
-  --accent-lime: #c5f946;
-  --accent-purple: #8a2be2;
-  --text-main: #e0e0e0;
-  --text-sub: #71757a;
+  --bg-deep: #070b14;
+  --bg-card: #111827;
+  --accent-lime: #22d3ee;
+  --accent-purple: #7c3aed;
+  --accent-success: #5af28d;
+  --text-main: #e5eefb;
+  --text-sub: #7f8ca3;
   --text-inverse: #0b0c10;
-  --border-tech: #2a2d35;
+  --border-tech: #263246;
   --shadow-float: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
-  --shadow-glow-lime: 0 0 20px rgba(197, 249, 70, 0.2);
+  --shadow-glow-lime: 0 0 20px rgba(34, 211, 238, 0.22);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -916,7 +1005,7 @@ html, body, #app {
 .app-stage { position: relative; z-index: 1; width: 100%; min-height: 100vh; color: var(--text-main); font-family: 'Space Grotesk', 'Noto Sans SC', monospace; }
 
 .ambient-noise { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E"); pointer-events: none; z-index: -1; }
-.ambient-glow { position: fixed; top: -20%; left: 20%; width: 60vw; height: 60vh; background: radial-gradient(circle, rgba(197, 249, 70, 0.08) 0%, rgba(11, 12, 16, 0) 70%); pointer-events: none; z-index: -2; }
+.ambient-glow { position: fixed; top: -20%; left: 20%; width: 60vw; height: 60vh; background: radial-gradient(circle, rgba(34, 211, 238, 0.1) 0%, rgba(7, 11, 20, 0) 70%); pointer-events: none; z-index: -2; }
 
 /* 导航 */
 .navbar { position: sticky; top: 0; z-index: 100; width: 100%; padding: 1.2rem 0; background: rgba(11, 12, 16, 0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border-tech); }
@@ -928,7 +1017,7 @@ html, body, #app {
 
 .nav-controls { display: flex; align-items: center; gap: 15px; }
 .auth-btn { background: transparent; border: 1px solid var(--border-tech); color: var(--accent-lime); padding: 6px 16px; border-radius: 4px; font-family: 'Noto Sans SC', sans-serif; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.3s; font-size: 0.85rem; }
-.auth-btn:hover { background: rgba(197, 249, 70, 0.1); border-color: var(--accent-lime); box-shadow: 0 0 10px rgba(197, 249, 70, 0.2); }
+.auth-btn:hover { background: rgba(34, 211, 238, 0.1); border-color: var(--accent-lime); box-shadow: 0 0 10px rgba(34, 211, 238, 0.22); }
 .user-profile { display: flex; align-items: center; gap: 10px; font-family: monospace; font-size: 0.9rem; color: var(--text-main); }
 .user-name { color: var(--accent-lime); }
 .logout-btn { background: none; border: none; color: var(--text-sub); cursor: pointer; padding: 4px; display: flex; align-items: center; transition: color 0.3s; }
@@ -941,7 +1030,7 @@ html, body, #app {
 /* Hero */
 .main-container { max-width: 1200px; margin: 0 auto; padding: 4rem 2rem; }
 .hero-section { text-align: center; margin-bottom: 6rem; animation: slideUpFade 0.8s forwards; }
-.slogan-main { font-family: 'Syncopate', sans-serif; font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; margin-bottom: 0.5rem; text-shadow: 0 0 20px rgba(197, 249, 70, 0.2); }
+.slogan-main { font-family: 'Syncopate', sans-serif; font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; margin-bottom: 0.5rem; text-shadow: 0 0 20px rgba(34, 211, 238, 0.22); }
 .slogan-sub { font-size: 1.1rem; color: var(--text-sub); letter-spacing: 2px; margin-bottom: 3rem; }
 
 /* === [START] 核心重构：Upload Wrapper (Physical Skew) === */
@@ -981,7 +1070,7 @@ html, body, #app {
 
 /* 鼠标悬停逻辑：只改变背景色，不加外发光，防止穿模 */
 .skew-pane:hover {
-  background: rgba(197, 249, 70, 0.05); /* 极淡的绿色背景，限制在斜框内 */
+  background: rgba(34, 211, 238, 0.07);
   z-index: 10;
 }
 
@@ -1042,18 +1131,20 @@ html, body, #app {
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
 .project-card { background: var(--bg-card); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); border: 1px solid var(--border-tech); overflow: hidden; transition: transform 0.2s; position: relative; }
 .project-card:hover { transform: translateY(-2px); border-color: var(--accent-lime); }
-.card-meta { display: flex; gap: 1.5rem; padding: 1.5rem; align-items: center; border-bottom: 1px solid var(--border-tech); background: rgba(18, 21, 18, 0.5); }
-.meta-icon { width: 56px; height: 56px; background: rgba(197, 249, 70, 0.05); border: 1px solid var(--accent-lime); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--accent-lime); }
+.card-meta { display: flex; gap: 1.5rem; padding: 1.5rem; align-items: center; border-bottom: 1px solid var(--border-tech); background: rgba(10, 18, 34, 0.58); }
+.meta-icon { width: 56px; height: 56px; background: rgba(34, 211, 238, 0.08); border: 1px solid var(--accent-lime); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--accent-lime); }
 .filename-mask { font-size: 1.1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
 .meta-tags { display: flex; gap: 12px; font-size: 0.85rem; font-family: monospace; margin-top: 5px; }
 .time-tag { color: var(--text-sub); }
 .status-indicator { font-weight: 600; padding: 2px 8px; border-radius: 4px; }
-.status-indicator.completed { color: var(--accent-lime); border: 1px solid var(--accent-lime); background: rgba(197, 249, 70, 0.1); }
+.status-indicator.completed { color: var(--accent-success); border: 1px solid var(--accent-success); background: rgba(90, 242, 141, 0.1); }
 .status-indicator.processing { color: var(--accent-purple); border: 1px solid var(--accent-purple); animation: blink 1s infinite; }
 
-.action-dock { display: grid; grid-template-columns: 1fr 1fr 1.5fr; gap: 12px; padding: 12px; background: rgba(5, 8, 5, 0.5); }
-.dock-item { position: relative; border: 1px solid var(--border-tech); background: var(--bg-card); border-radius: 8px; padding: 16px; display: flex; align-items: center; justify-content: center; gap: 10px; cursor: pointer; transition: all 0.3s; color: var(--text-sub); font-family: monospace; overflow: hidden; }
-.dock-item:hover:not(:disabled) { color: var(--accent-lime); border-color: var(--accent-lime); background: rgba(197, 249, 70, 0.05); }
+.action-dock { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 12px; background: rgba(8, 15, 30, 0.64); }
+.dock-item { position: relative; min-width: 0; border: 1px solid var(--border-tech); background: var(--bg-card); border-radius: 8px; padding: 12px 8px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; transition: all 0.3s; color: var(--text-sub); font-family: monospace; overflow: hidden; white-space: nowrap; }
+.dock-item svg { flex: 0 0 auto; }
+.item-label { white-space: nowrap; }
+.dock-item:hover:not(:disabled) { color: var(--accent-lime); border-color: var(--accent-lime); background: rgba(34, 211, 238, 0.08); }
 .dock-item:disabled { opacity: 0.3; cursor: not-allowed; }
 .dock-item.ai-core { border-color: var(--accent-purple); color: var(--accent-purple); }
 .dock-item.ai-core .label-group { display: flex; flex-direction: column; align-items: flex-start; z-index: 1; }
@@ -1065,12 +1156,12 @@ html, body, #app {
 .rag-section { margin-top: 4rem; opacity: 0; animation: slideUpFade 0.8s 0.5s forwards; }
 .rag-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 20px; }
 .rag-panel { background: var(--bg-card); border: 1px solid var(--border-tech); border-radius: 12px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
-.rag-panel:hover { border-color: rgba(197, 249, 70, 0.55); }
+.rag-panel:hover { border-color: rgba(34, 211, 238, 0.58); }
 .rag-panel-title { color: var(--accent-lime); font-weight: 700; letter-spacing: 1px; margin-bottom: 16px; font-family: 'Noto Sans SC', monospace; }
 .rag-upload-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
 .rag-file-input { width: 100%; background: #000; border: 1px solid var(--border-tech); color: var(--text-main); padding: 10px; font-family: monospace; }
 .rag-action-btn { border: 1px solid var(--accent-lime); background: var(--accent-lime); color: var(--text-inverse); padding: 10px 14px; border-radius: 4px; cursor: pointer; font-weight: 700; font-family: 'Noto Sans SC', sans-serif; transition: all 0.3s; white-space: nowrap; }
-.rag-action-btn:hover:not(:disabled) { box-shadow: 0 0 14px rgba(197, 249, 70, 0.28); transform: translateY(-1px); }
+.rag-action-btn:hover:not(:disabled) { box-shadow: 0 0 14px rgba(34, 211, 238, 0.28); transform: translateY(-1px); }
 .rag-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .rag-action-btn.ghost { background: transparent; color: var(--accent-lime); }
 .rag-action-btn.ask { width: 100%; margin-top: 12px; }
@@ -1078,20 +1169,23 @@ html, body, #app {
 .rag-message.error { color: #ff4757; }
 .rag-doc-list { margin-top: 18px; display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto; }
 .rag-empty { border: 1px dashed var(--border-tech); color: var(--text-sub); padding: 16px; text-align: center; border-radius: 8px; font-size: 0.9rem; }
-.rag-doc-item { border: 1px solid var(--border-tech); border-radius: 8px; padding: 12px; background: rgba(5, 8, 5, 0.45); }
+.rag-doc-item { border: 1px solid var(--border-tech); border-radius: 8px; padding: 12px; background: rgba(8, 15, 30, 0.56); }
 .rag-doc-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .rag-doc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.rag-doc-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .rag-doc-status { border: 1px solid var(--border-tech); border-radius: 4px; padding: 2px 8px; font-size: 0.75rem; font-family: monospace; }
-.rag-doc-status.ready { color: var(--accent-lime); border-color: var(--accent-lime); }
+.rag-delete-btn { border: 1px solid #ff4757; background: transparent; color: #ff8b96; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.75rem; font-family: 'Noto Sans SC', sans-serif; }
+.rag-delete-btn:hover { background: rgba(255, 71, 87, 0.12); color: #fff; }
+.rag-doc-status.ready { color: var(--accent-success); border-color: var(--accent-success); }
 .rag-doc-status.failed { color: #ff4757; border-color: #ff4757; }
 .rag-doc-status.processing { color: var(--accent-purple); border-color: var(--accent-purple); }
 .rag-doc-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--text-sub); font-size: 0.78rem; font-family: monospace; }
 .rag-question { width: 100%; min-height: 110px; resize: vertical; background: #000; border: 1px solid var(--border-tech); color: var(--text-main); padding: 12px; border-radius: 8px; outline: none; font-family: 'Noto Sans SC', monospace; line-height: 1.6; }
-.rag-question:focus { border-color: var(--accent-lime); box-shadow: 0 0 10px rgba(197, 249, 70, 0.2); }
+.rag-question:focus { border-color: var(--accent-lime); box-shadow: 0 0 10px rgba(34, 211, 238, 0.22); }
 .rag-answer, .rag-sources { margin-top: 18px; border-top: 1px solid var(--border-tech); padding-top: 16px; }
 .rag-result-title { color: var(--text-sub); font-family: monospace; font-size: 0.75rem; letter-spacing: 1px; margin-bottom: 10px; }
 .rag-answer p { white-space: pre-wrap; line-height: 1.8; color: var(--text-main); }
-.rag-source-item { border: 1px solid var(--border-tech); border-radius: 8px; margin-bottom: 10px; background: rgba(5, 8, 5, 0.45); overflow: hidden; }
+.rag-source-item { border: 1px solid var(--border-tech); border-radius: 8px; margin-bottom: 10px; background: rgba(8, 15, 30, 0.56); overflow: hidden; }
 .rag-source-item summary { cursor: pointer; padding: 10px 12px; color: var(--accent-lime); display: flex; justify-content: space-between; gap: 12px; font-family: monospace; }
 .rag-source-item pre { white-space: pre-wrap; margin: 0; padding: 12px; color: #d4d4d8; background: #000; border-top: 1px solid var(--border-tech); line-height: 1.6; font-family: 'Noto Sans SC', monospace; max-height: 220px; overflow-y: auto; }
 
@@ -1129,9 +1223,9 @@ html, body, #app {
 .input-group { margin-bottom: 20px; }
 .input-group label { display: block; font-family: 'Noto Sans SC', monospace; color: var(--text-sub); font-size: 0.75rem; margin-bottom: 8px; letter-spacing: 1px; }
 .input-group input { width: 100%; background: #000; border: 1px solid var(--border-tech); padding: 12px; color: var(--text-main); font-family: monospace; font-size: 1rem; outline: none; transition: all 0.3s; }
-.input-group input:focus { border-color: var(--accent-lime); box-shadow: 0 0 10px rgba(197, 249, 70, 0.2); }
+.input-group input:focus { border-color: var(--accent-lime); box-shadow: 0 0 10px rgba(34, 211, 238, 0.22); }
 .cyber-btn { width: 100%; background: var(--text-main); color: var(--bg-deep); border: none; padding: 12px; font-weight: 700; font-family: 'Noto Sans SC', sans-serif; cursor: pointer; transition: all 0.3s; clip-path: polygon(5% 0%, 100% 0%, 95% 100%, 0% 100%); margin-bottom: 20px; }
-.cyber-btn:hover:not(:disabled) { background: var(--accent-lime); color: var(--text-inverse); box-shadow: 0 0 20px rgba(197, 249, 70, 0.4); }
+.cyber-btn:hover:not(:disabled) { background: var(--accent-lime); color: var(--text-inverse); box-shadow: 0 0 20px rgba(34, 211, 238, 0.34); }
 .cyber-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .auth-toggle { text-align: center; font-size: 0.85rem; font-family: 'Noto Sans SC', sans-serif; color: var(--text-sub); }
 .toggle-link { background: none; border: none; color: var(--accent-lime); cursor: pointer; font-weight: 700; margin-left: 5px; text-decoration: underline; }
@@ -1147,8 +1241,135 @@ html, body, #app {
 .project-card:hover .delete-btn { opacity: 1; }
 .delete-btn:hover { color: #ff4757; transform: scale(1.2) rotate(90deg); }
 
+/* Workbench refactor */
+.navbar { padding: 0.9rem 0; }
+.ambient-glow { background: radial-gradient(circle, rgba(34, 211, 238, 0.1) 0%, rgba(7, 11, 20, 0) 70%); }
+.nav-content { align-items: center; gap: 24px; }
+.brand { align-items: center; gap: 12px; min-width: 0; }
+.brand-mark {
+  width: 42px; height: 42px; border: 1px solid var(--accent-lime); border-radius: 8px;
+  display: grid; place-items: center; color: var(--accent-lime); font-weight: 800;
+  background: rgba(34, 211, 238, 0.08); box-shadow: inset 0 0 18px rgba(124, 58, 237, 0.12);
+}
+.brand-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.brand-title { font-family: 'Noto Sans SC', sans-serif; font-size: 1.1rem; font-weight: 800; color: var(--text-main); }
+.brand-subtitle { font-family: 'Noto Sans SC', sans-serif; font-size: 0.78rem; color: var(--text-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.main-container { max-width: 1440px; padding: 2rem; }
+.console-intro {
+  display: flex; align-items: end; justify-content: space-between; gap: 20px;
+  margin-bottom: 18px; padding: 22px 0 12px; border-bottom: 1px solid var(--border-tech);
+}
+.eyebrow, .panel-kicker {
+  color: var(--accent-lime); font-family: monospace; font-size: 0.72rem;
+  letter-spacing: 1px; margin-bottom: 6px;
+}
+.console-intro h1 { font-size: clamp(1.5rem, 3vw, 2.4rem); line-height: 1.15; font-family: 'Noto Sans SC', sans-serif; }
+.intro-subtitle { margin-top: 8px; color: var(--text-sub); font-size: 0.95rem; font-family: 'Noto Sans SC', sans-serif; }
+.intro-metrics { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.intro-metrics span {
+  border: 1px solid var(--border-tech); border-radius: 6px; padding: 8px 12px;
+  background: rgba(15, 23, 42, 0.72); color: var(--text-sub); font-size: 0.82rem;
+}
+
+.workspace-tabs {
+  display: inline-grid; grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 6px; padding: 6px; margin: 0 0 18px; border: 1px solid var(--border-tech);
+  border-radius: 8px; background: rgba(8, 15, 30, 0.72);
+}
+.workspace-tab {
+  border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-sub);
+  padding: 10px 16px; cursor: pointer; font-family: 'Noto Sans SC', sans-serif; font-weight: 700;
+  transition: all 0.2s ease;
+}
+.workspace-tab:hover { color: var(--accent-lime); }
+.workspace-tab.active {
+  color: var(--text-inverse); background: var(--accent-lime); border-color: var(--accent-lime);
+  box-shadow: 0 0 18px rgba(34, 211, 238, 0.2);
+}
+
+.workbench-shell { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px; align-items: stretch; }
+.workbench-main { min-width: 0; display: flex; flex-direction: column; gap: 20px; align-self: stretch; }
+.video-workspace { display: flex; flex-direction: column; gap: 20px; }
+.hero-section, .workspace-section, .rag-section {
+  margin: 0; text-align: left; opacity: 1; animation: none;
+  background: rgba(15, 23, 42, 0.74); border: 1px solid var(--border-tech);
+  border-radius: 8px; padding: 20px; box-shadow: var(--shadow-float);
+}
+.section-header {
+  justify-content: space-between; align-items: flex-start; margin-bottom: 16px;
+  border-bottom: 1px solid var(--border-tech); padding-bottom: 12px;
+}
+.section-header h3 { font-size: 1.2rem; font-family: 'Noto Sans SC', sans-serif; }
+.upload-wrapper { max-width: none; opacity: 1; animation: none; }
+.upload-magnet { height: 220px; border-radius: 8px; border-width: 1px; }
+.upload-magnet:hover { transform: none; }
+.magnet-title { font-family: 'Space Grotesk', 'Noto Sans SC', sans-serif; font-size: 1.1rem; }
+.card-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.project-card, .rag-panel, .rag-doc-item, .rag-source-item { border-radius: 8px; }
+.empty-state {
+  border: 1px dashed var(--border-tech); border-radius: 8px; padding: 24px;
+  color: var(--text-sub); text-align: center; background: rgba(8, 15, 30, 0.5);
+}
+.notification-bar { display: block; width: fit-content; margin: 0 0 18px; clip-path: none; border-radius: 6px; }
+.rag-section { margin-top: 0; }
+.rag-layout { grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr); }
+.rag-answer, .rag-sources { background: rgba(8, 15, 30, 0.5); border: 1px solid var(--border-tech); border-radius: 8px; padding: 14px; }
+
+.result-panel {
+  min-height: 0; height: auto; align-self: stretch;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: rgba(10, 18, 34, 0.94); border: 1px solid var(--border-tech);
+  border-top: 2px solid var(--accent-lime); border-radius: 8px; box-shadow: var(--shadow-float);
+}
+.result-panel.has-result { border-color: rgba(34, 211, 238, 0.58); }
+.result-panel .sidebar-header { padding: 16px 18px; }
+.result-panel .sidebar-title { font-size: 1rem; min-width: 0; }
+.result-panel .sidebar-body { padding: 18px; }
+.result-empty {
+  min-height: 320px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; color: var(--text-sub); text-align: center; line-height: 1.7;
+}
+.result-empty-icon {
+  width: 64px; height: 64px; border-radius: 12px; display: grid; place-items: center;
+  border: 1px solid var(--accent-lime); color: var(--accent-lime); font-weight: 800;
+  background: rgba(34, 211, 238, 0.08);
+}
+.result-sources { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-tech); }
+
+.status-dot { background: var(--accent-success); }
+.status-pill.is-active .status-dot { animation: pulse-success 1.5s infinite alternate; }
+.status-indicator.completed,
+.rag-doc-status.ready {
+  color: var(--accent-success);
+  border-color: var(--accent-success);
+  background: rgba(90, 242, 141, 0.1);
+}
+.notification-bar { background: var(--accent-success); }
+.auth-msg { color: var(--accent-success); }
+
+@media (max-width: 1100px) {
+  .workbench-shell { grid-template-columns: 1fr; }
+  .result-panel { position: relative; top: auto; min-height: 360px; max-height: none; }
+}
+
+@media (max-width: 760px) {
+  .nav-content, .console-intro { flex-direction: column; align-items: stretch; }
+  .nav-controls, .intro-metrics { justify-content: flex-start; }
+  .main-container { padding: 1rem; }
+  .workspace-tabs { display: grid; width: 100%; }
+  .upload-magnet { height: auto; min-height: 320px; }
+  .split-container { flex-direction: column; }
+  .skew-pane, .pane-content, .split-gap { transform: none; }
+  .pane-local, .pane-url { margin: 0; padding: 18px; border-right: none; }
+  .pane-local { border-bottom: 1px solid var(--border-tech); }
+  .action-dock { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .dock-item { padding: 10px 6px; font-size: 0.78rem; gap: 5px; }
+}
+
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes slideUpFade { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes pulse-lime { 0% { opacity: 0.5; box-shadow: 0 0 5px var(--accent-lime); } 100% { opacity: 1; box-shadow: 0 0 15px var(--accent-lime); } }
+@keyframes pulse-success { 0% { opacity: 0.55; box-shadow: 0 0 5px var(--accent-success); } 100% { opacity: 1; box-shadow: 0 0 15px var(--accent-success); } }
 @keyframes blink { 50% { opacity: 0.5; } }
 </style>
