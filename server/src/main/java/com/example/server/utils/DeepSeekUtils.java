@@ -56,6 +56,13 @@ public class DeepSeekUtils {
         return chatModel.chat(SYSTEM_PROMPT + "\n\n待分析文本：\n" + content);
     }
 
+    public String chat(String prompt) {
+        if (prompt == null || prompt.isBlank()) {
+            return "";
+        }
+        return chatModel.chat(prompt);
+    }
+
     public AgentState.AgentPlan plan(VideoContext context) {
         try {
             String prompt = """
