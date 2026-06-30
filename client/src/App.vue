@@ -171,6 +171,76 @@
         </div>
       </section>
 
+      <section class="rag-section">
+        <div class="section-header">
+          <h3>知识库 / RAG 问答</h3>
+          <div class="count-chip">USER 1</div>
+        </div>
+
+        <div class="rag-layout">
+          <div class="rag-panel">
+            <div class="rag-panel-title">文档上传</div>
+            <div class="rag-upload-row">
+              <input
+                  type="file"
+                  accept=".txt,.md"
+                  class="rag-file-input"
+                  @change="handleRagFileChange"
+              />
+              <button class="rag-action-btn" :disabled="ragUploading || !ragFile" @click="uploadRagDocument">
+                {{ ragUploading ? '上传中...' : '上传文档' }}
+              </button>
+              <button class="rag-action-btn ghost" :disabled="ragListLoading" @click="fetchRagDocuments">
+                {{ ragListLoading ? '加载中...' : '刷新列表' }}
+              </button>
+            </div>
+            <p v-if="ragMessage" class="rag-message" :class="{ error: ragError }">{{ ragMessage }}</p>
+
+            <div class="rag-doc-list">
+              <div v-if="ragDocuments.length === 0" class="rag-empty">暂无知识库文档</div>
+              <div v-for="doc in ragDocuments" :key="doc.id" class="rag-doc-item">
+                <div class="rag-doc-main">
+                  <span class="rag-doc-name" :title="doc.originalFilename">{{ doc.originalFilename }}</span>
+                  <span class="rag-doc-status" :class="(doc.status || '').toLowerCase()">{{ doc.status }}</span>
+                </div>
+                <div class="rag-doc-meta">
+                  <span>{{ doc.chunkCount || 0 }} chunks</span>
+                  <span>{{ formatTime(doc.createTime) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rag-panel">
+            <div class="rag-panel-title">知识库提问</div>
+            <textarea
+                v-model="ragQuestion"
+                class="rag-question"
+                placeholder="输入你的问题，例如：Spring Boot 是什么？"
+            ></textarea>
+            <button class="rag-action-btn ask" :disabled="ragAsking || !ragQuestion.trim()" @click="askRag">
+              {{ ragAsking ? '检索并生成中...' : '提问' }}
+            </button>
+
+            <div v-if="ragAnswer" class="rag-answer">
+              <div class="rag-result-title">ANSWER</div>
+              <p>{{ ragAnswer }}</p>
+            </div>
+
+            <div v-if="ragSources.length > 0" class="rag-sources">
+              <div class="rag-result-title">SOURCES</div>
+              <details v-for="source in ragSources" :key="source.chunkId" class="rag-source-item" open>
+                <summary>
+                  chunk #{{ source.chunkIndex }}
+                  <span>score {{ formatScore(source.score) }}</span>
+                </summary>
+                <pre>{{ source.content }}</pre>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <div class="sidebar-backdrop" v-if="sidebar.visible" @click="closeSidebar"></div>
       <div class="sidebar-panel" :class="{ 'is-open': sidebar.visible }">
         <div class="sidebar-header">
@@ -251,6 +321,17 @@ const authMessage = ref('')
 const authError = ref(false)
 const authForm = ref({ username: '', password: '', nickname: '' })
 const pollingTimers = ref({})
+const ragUserId = 1
+const ragFile = ref(null)
+const ragDocuments = ref([])
+const ragQuestion = ref('')
+const ragAnswer = ref('')
+const ragSources = ref([])
+const ragUploading = ref(false)
+const ragListLoading = ref(false)
+const ragAsking = ref(false)
+const ragMessage = ref('')
+const ragError = ref(false)
 
 // Markdown 解析
 const renderedMarkdown = computed(() => {
@@ -414,6 +495,106 @@ const handleUrlUpload = async () => {
 const showMsg = (msg, isError = false) => {
   message.value = msg
   setTimeout(() => { if(message.value === msg) message.value = '' }, 4000)
+}
+
+const showRagMsg = (msg, isError = false) => {
+  ragMessage.value = msg
+  ragError.value = isError
+}
+
+const handleRagFileChange = (e) => {
+  const selectedFile = e.target.files[0]
+  if (!selectedFile) {
+    ragFile.value = null
+    return
+  }
+  const lowerName = selectedFile.name.toLowerCase()
+  if (!lowerName.endsWith('.txt') && !lowerName.endsWith('.md')) {
+    ragFile.value = null
+    e.target.value = ''
+    showRagMsg('仅支持 txt / md 文档', true)
+    return
+  }
+  ragFile.value = selectedFile
+  showRagMsg(`已选择：${selectedFile.name}`)
+}
+
+const uploadRagDocument = async () => {
+  if (!ragFile.value) return
+  ragUploading.value = true
+  showRagMsg('正在上传并切块入库...')
+
+  const formData = new FormData()
+  formData.append('file', ragFile.value)
+
+  try {
+    const res = await fetch(`http://localhost:9090/knowledge/upload?userId=${ragUserId}`, {
+      method: 'POST',
+      body: formData
+    })
+    const text = await res.text()
+    if (!res.ok) throw new Error(text || '知识库文档上传失败')
+
+    const data = JSON.parse(text)
+    showRagMsg(`上传成功：documentId=${data.documentId}, chunks=${data.chunkCount}`)
+    ragFile.value = null
+    await fetchRagDocuments()
+  } catch (error) {
+    console.error(error)
+    showRagMsg('上传失败：' + error.message, true)
+  } finally {
+    ragUploading.value = false
+  }
+}
+
+const fetchRagDocuments = async () => {
+  ragListLoading.value = true
+  try {
+    const res = await fetch(`http://localhost:9090/knowledge/list?userId=${ragUserId}`)
+    if (!res.ok) throw new Error(await res.text() || '文档列表加载失败')
+    ragDocuments.value = await res.json()
+  } catch (error) {
+    console.error(error)
+    showRagMsg('文档列表加载失败：' + error.message, true)
+  } finally {
+    ragListLoading.value = false
+  }
+}
+
+const askRag = async () => {
+  if (!ragQuestion.value.trim()) return
+  ragAsking.value = true
+  ragAnswer.value = ''
+  ragSources.value = []
+  showRagMsg('')
+
+  try {
+    const res = await fetch('http://localhost:9090/knowledge/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: ragUserId,
+        question: ragQuestion.value.trim(),
+        topK: 5
+      })
+    })
+    const text = await res.text()
+    if (!res.ok) throw new Error(text || '问答失败')
+    const data = JSON.parse(text)
+
+    ragAnswer.value = data.answer || ''
+    ragSources.value = data.sources || []
+  } catch (error) {
+    console.error(error)
+    showRagMsg('提问失败：' + error.message, true)
+  } finally {
+    ragAsking.value = false
+  }
+}
+
+const formatScore = (score) => {
+  const value = Number(score)
+  return Number.isFinite(value) ? value.toFixed(4) : '0.0000'
 }
 
 const fetchList = async () => {
@@ -703,6 +884,7 @@ onMounted(() => {
     } catch(e) {}
   }
   fetchList()
+  fetchRagDocuments()
 })
 </script>
 
@@ -878,6 +1060,45 @@ html, body, #app {
 .dock-item.ai-core .item-sub { font-size: 0.75rem; color: var(--accent-purple); opacity: 0.8; }
 .dock-item.ai-core:hover:not(:disabled) { border-color: var(--accent-lime); color: var(--text-inverse); background: var(--accent-lime); }
 .dock-item.ai-core:hover:not(:disabled) .item-sub { color: var(--text-inverse); }
+
+/* RAG */
+.rag-section { margin-top: 4rem; opacity: 0; animation: slideUpFade 0.8s 0.5s forwards; }
+.rag-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 20px; }
+.rag-panel { background: var(--bg-card); border: 1px solid var(--border-tech); border-radius: 12px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+.rag-panel:hover { border-color: rgba(197, 249, 70, 0.55); }
+.rag-panel-title { color: var(--accent-lime); font-weight: 700; letter-spacing: 1px; margin-bottom: 16px; font-family: 'Noto Sans SC', monospace; }
+.rag-upload-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
+.rag-file-input { width: 100%; background: #000; border: 1px solid var(--border-tech); color: var(--text-main); padding: 10px; font-family: monospace; }
+.rag-action-btn { border: 1px solid var(--accent-lime); background: var(--accent-lime); color: var(--text-inverse); padding: 10px 14px; border-radius: 4px; cursor: pointer; font-weight: 700; font-family: 'Noto Sans SC', sans-serif; transition: all 0.3s; white-space: nowrap; }
+.rag-action-btn:hover:not(:disabled) { box-shadow: 0 0 14px rgba(197, 249, 70, 0.28); transform: translateY(-1px); }
+.rag-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.rag-action-btn.ghost { background: transparent; color: var(--accent-lime); }
+.rag-action-btn.ask { width: 100%; margin-top: 12px; }
+.rag-message { margin-top: 12px; color: var(--accent-lime); font-size: 0.85rem; font-family: 'Noto Sans SC', monospace; }
+.rag-message.error { color: #ff4757; }
+.rag-doc-list { margin-top: 18px; display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto; }
+.rag-empty { border: 1px dashed var(--border-tech); color: var(--text-sub); padding: 16px; text-align: center; border-radius: 8px; font-size: 0.9rem; }
+.rag-doc-item { border: 1px solid var(--border-tech); border-radius: 8px; padding: 12px; background: rgba(5, 8, 5, 0.45); }
+.rag-doc-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.rag-doc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.rag-doc-status { border: 1px solid var(--border-tech); border-radius: 4px; padding: 2px 8px; font-size: 0.75rem; font-family: monospace; }
+.rag-doc-status.ready { color: var(--accent-lime); border-color: var(--accent-lime); }
+.rag-doc-status.failed { color: #ff4757; border-color: #ff4757; }
+.rag-doc-status.processing { color: var(--accent-purple); border-color: var(--accent-purple); }
+.rag-doc-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--text-sub); font-size: 0.78rem; font-family: monospace; }
+.rag-question { width: 100%; min-height: 110px; resize: vertical; background: #000; border: 1px solid var(--border-tech); color: var(--text-main); padding: 12px; border-radius: 8px; outline: none; font-family: 'Noto Sans SC', monospace; line-height: 1.6; }
+.rag-question:focus { border-color: var(--accent-lime); box-shadow: 0 0 10px rgba(197, 249, 70, 0.2); }
+.rag-answer, .rag-sources { margin-top: 18px; border-top: 1px solid var(--border-tech); padding-top: 16px; }
+.rag-result-title { color: var(--text-sub); font-family: monospace; font-size: 0.75rem; letter-spacing: 1px; margin-bottom: 10px; }
+.rag-answer p { white-space: pre-wrap; line-height: 1.8; color: var(--text-main); }
+.rag-source-item { border: 1px solid var(--border-tech); border-radius: 8px; margin-bottom: 10px; background: rgba(5, 8, 5, 0.45); overflow: hidden; }
+.rag-source-item summary { cursor: pointer; padding: 10px 12px; color: var(--accent-lime); display: flex; justify-content: space-between; gap: 12px; font-family: monospace; }
+.rag-source-item pre { white-space: pre-wrap; margin: 0; padding: 12px; color: #d4d4d8; background: #000; border-top: 1px solid var(--border-tech); line-height: 1.6; font-family: 'Noto Sans SC', monospace; max-height: 220px; overflow-y: auto; }
+
+@media (max-width: 860px) {
+  .rag-layout { grid-template-columns: 1fr; }
+  .rag-upload-row { grid-template-columns: 1fr; }
+}
 
 /* Sidebar */
 .sidebar-backdrop { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 998; }
