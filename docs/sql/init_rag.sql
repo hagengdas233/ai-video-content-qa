@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
   content LONGTEXT NOT NULL COMMENT '切块文本内容',
   content_hash VARCHAR(64) DEFAULT NULL COMMENT '内容哈希',
   char_count INT DEFAULT NULL COMMENT '字符数',
-  embedding LONGTEXT NOT NULL COMMENT '向量JSON字符串',
+  embedding LONGTEXT NULL COMMENT '向量JSON字符串',
   embedding_model VARCHAR(100) DEFAULT NULL COMMENT 'Embedding模型',
   embedding_dim INT DEFAULT NULL COMMENT '向量维度',
   create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
