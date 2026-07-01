@@ -13,7 +13,7 @@ import java.util.UUID;
 @Component
 public class YtDlpUtils {
 
-    @Value("${tool.ytdlp.path}")
+    @Value("${ytdlp.path}")
     private String ytDlpPath;
 
     @Value("${tool.ffmpeg.dir}")
@@ -26,8 +26,13 @@ public class YtDlpUtils {
 
         System.out.println("⬇️ [yt-dlp] 开始下载 (智能模式): " + url);
 
+        File ytDlpFile = new File(ytDlpPath == null ? "" : ytDlpPath);
+        if (ytDlpPath == null || ytDlpPath.isBlank() || !ytDlpFile.isFile()) {
+            throw new IllegalStateException("yt-dlp 未安装或路径配置错误，请检查 ytdlp.path 或 YTDLP_PATH");
+        }
+
         List<String> command = new ArrayList<>();
-        command.add(ytDlpPath);
+        command.add(ytDlpFile.getAbsolutePath());
 
 
         //删除所有 -f xxx 的限制，让 yt-dlp 自己选最佳兼容格式
@@ -57,7 +62,12 @@ public class YtDlpUtils {
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectErrorStream(true);
 
-        Process process = pb.start();
+        Process process;
+        try {
+            process = pb.start();
+        } catch (Exception e) {
+            throw new IllegalStateException("yt-dlp 未安装或路径配置错误，请检查 ytdlp.path 或 YTDLP_PATH");
+        }
 
         StringBuilder logs = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
@@ -74,7 +84,8 @@ public class YtDlpUtils {
         int exitCode = process.waitFor();
         if (exitCode != 0) {
             //如果还是失败抛出异常，前端会显示红色报错
-            throw new RuntimeException("yt-dlp 下载失败: " + logs.toString());
+            String summary = summarizeFailure(logs.toString());
+            throw new RuntimeException("yt-dlp 下载失败" + (summary.isBlank() ? "" : ": " + summary));
         }
 
         File downloadedFile = new File(outputPath);
@@ -84,5 +95,33 @@ public class YtDlpUtils {
 
         System.out.println("✅ [yt-dlp] 下载完成: " + (downloadedFile.length() / 1024) + "KB");
         return downloadedFile;
+    }
+
+    private String summarizeFailure(String logs) {
+        if (logs == null || logs.isBlank()) {
+            return "请检查视频链接或网络状态";
+        }
+
+        String lastUsefulLine = "";
+        String[] lines = logs.split("\\R");
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            lastUsefulLine = trimmed;
+            if (trimmed.contains("ERROR")) {
+                return truncateForResponse(trimmed);
+            }
+        }
+        return truncateForResponse(lastUsefulLine);
+    }
+
+    private String truncateForResponse(String message) {
+        if (message == null) {
+            return "";
+        }
+        int maxLength = 300;
+        return message.length() <= maxLength ? message : message.substring(0, maxLength) + "...";
     }
 }
