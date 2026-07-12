@@ -1,0 +1,52 @@
+@host = http://localhost:9090
+@mediaId = 1
+@token = <token-from-login>
+@otherToken = <other-user-token>
+
+### Submit a formal video analysis task
+POST {{host}}/media/analyze/{{mediaId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "goal": "Summarize the core ideas of this video and return structured conclusions with evidence."
+}
+
+### Duplicate submission check
+POST {{host}}/media/analyze/{{mediaId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "goal": "Summarize the core ideas of this video."
+}
+
+### Missing token should return 401
+POST {{host}}/media/analyze/{{mediaId}}
+Content-Type: application/json
+
+{
+  "goal": "This request should return 401 because Authorization is missing."
+}
+
+### Permission check: use a token for a user that does not own the media
+POST {{host}}/media/analyze/{{mediaId}}
+Authorization: Bearer {{otherToken}}
+Content-Type: application/json
+
+{
+  "goal": "This request should return 403 if the media belongs to another user."
+}
+
+### userId in query/body is ignored by the formal endpoint
+POST {{host}}/media/analyze/{{mediaId}}?userId=999
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "userId": 999,
+  "goal": "The server should use Authorization token user, not this forged userId."
+}
+
+### Existing debug endpoint is still available
+GET {{host}}/debug/ai?id={{mediaId}}&goal=Debug analysis task

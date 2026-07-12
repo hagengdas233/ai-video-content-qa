@@ -2,7 +2,10 @@ package com.example.server.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.server.entity.MediaFile;
+import com.example.server.entity.User;
 import com.example.server.mapper.MediaFileMapper;
+import com.example.server.mapper.UserMapper;
+import com.example.server.service.MediaAnalysisTaskService;
 import com.example.server.service.MediaService;
 import com.example.server.utils.MinioUtils;
 import com.example.server.utils.YtDlpUtils; //确保导入这个
@@ -10,6 +13,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -17,6 +21,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -27,6 +32,9 @@ public class MediaController {
 
     @Autowired(required = false)
     private MediaFileMapper mediaFileMapper;
+
+    @Autowired(required = false)
+    private UserMapper userMapper;
 
     @Autowired
     private StringRedisTemplate redisTemplate;
@@ -42,6 +50,9 @@ public class MediaController {
 
     @Autowired
     private MediaService mediaService;
+
+    @Autowired
+    private MediaAnalysisTaskService mediaAnalysisTaskService;
 
     @PostMapping("/init-upload")
     public ResponseEntity<String> initUpload(@RequestParam String filename,
@@ -188,6 +199,34 @@ public class MediaController {
         }
     }
 
+    @PostMapping("/analyze/{mediaId}")
+    public ResponseEntity<?> analyze(@PathVariable Long mediaId,
+                                     @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+                                     @RequestBody(required = false) Map<String, Object> request) {
+        try {
+            Long currentUserId = resolveCurrentUserId(authorization);
+            String goal = request == null || request.get("goal") == null
+                    ? null
+                    : String.valueOf(request.get("goal"));
+
+            Map<String, Object> result = mediaAnalysisTaskService.submitAnalysis(mediaId, currentUserId, goal);
+            return ResponseEntity.status(202).body(result);
+        } catch (MediaAnalysisTaskService.MediaNotFoundException e) {
+            return ResponseEntity.status(404).body(e.getMessage());
+        } catch (MediaAnalysisTaskService.AccessDeniedException e) {
+            return ResponseEntity.status(403).body(e.getMessage());
+        } catch (MediaAnalysisTaskService.RateLimitExceededException e) {
+            return ResponseEntity.status(429).body(e.getMessage());
+        } catch (UnauthorizedException e) {
+            return ResponseEntity.status(401).body(e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(500).body("Analysis submit failed: " + e.getMessage());
+        }
+    }
+
     @GetMapping("/list")
     public List<MediaFile> getList(@RequestParam(value = "userId", required = false) Long userId) {
         String cacheKey = "media:list:user:" + (userId == null ? "anon" : userId);
@@ -246,5 +285,35 @@ public class MediaController {
         }
 
         return "删除成功";
+    }
+
+    private Long resolveCurrentUserId(String authorization) {
+        if (authorization == null || authorization.isBlank()) {
+            throw new UnauthorizedException("login required");
+        }
+
+        String token = authorization.trim();
+        if (token.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            token = token.substring(7).trim();
+        }
+        if (!token.matches("user_\\d+")) {
+            throw new UnauthorizedException("invalid token");
+        }
+
+        Long userId = Long.valueOf(token.substring("user_".length()));
+        if (userMapper == null) {
+            throw new UnauthorizedException("user service is not ready");
+        }
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new UnauthorizedException("invalid token");
+        }
+        return userId;
+    }
+
+    private static class UnauthorizedException extends RuntimeException {
+        private UnauthorizedException(String message) {
+            super(message);
+        }
     }
 }
