@@ -9,8 +9,10 @@ services:
     ports:
       - "3307:3306"  # 你的配置里用的是 3307
     environment:
-      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
       - MYSQL_DATABASE=media_db
+      - MYSQL_USER=${MYSQL_USER:?MYSQL_USER is required}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
       - TZ=Asia/Shanghai
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     volumes:
@@ -26,8 +28,15 @@ services:
     image: redis:latest
     container_name: redis-media
     ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes
+      - "127.0.0.1:6379:6379"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    volumes:
+      - redis-data:/data
     networks:
       - my-network
 
@@ -41,8 +50,8 @@ services:
       - "9000:9000"  # API 端口
       - "9001:9001"  # 控制台端口
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
     command: server /data --console-address ":9001"
     volumes:
       - ./minio/data:/data
@@ -103,3 +112,6 @@ services:
 networks:
   my-network:
     driver: bridge
+
+volumes:
+  redis-data:
