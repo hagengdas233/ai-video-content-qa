@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS `media_files` (
   `filename` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Original filename',
   `status` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Processing status',
   `file_path` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'File storage path or MinIO URL',
+  `content_hash` char(32) DEFAULT NULL COMMENT 'Server-computed lowercase MD5 of final video content',
   `ai_summary` longtext COLLATE utf8mb4_unicode_ci COMMENT 'AI summary in Markdown',
   `transcript_text` longtext COLLATE utf8mb4_unicode_ci COMMENT 'Transcript text',
   `cover_url` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Cover URL',

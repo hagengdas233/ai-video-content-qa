@@ -1,6 +1,7 @@
 package com.example.server.utils;
 
 import io.minio.MinioClient;
+import io.minio.GetObjectArgs;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -100,5 +101,21 @@ public class MinioUtils {
         }
 
         return endpoint + "/" + bucketName + "/" + objectName;
+    }
+
+    public InputStream openStoredFile(String fileUrl) throws Exception {
+        if (fileUrl == null || fileUrl.isBlank() || !fileUrl.contains("/")) {
+            throw new IllegalArgumentException("invalid MinIO file URL");
+        }
+        String objectName = fileUrl.substring(fileUrl.lastIndexOf('/') + 1);
+        if (objectName.isBlank()) {
+            throw new IllegalArgumentException("MinIO object name is missing");
+        }
+        return minioClient.getObject(
+                GetObjectArgs.builder()
+                        .bucket(bucketName)
+                        .object(objectName)
+                        .build()
+        );
     }
 }

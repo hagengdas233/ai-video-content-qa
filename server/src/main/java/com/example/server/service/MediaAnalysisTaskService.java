@@ -3,7 +3,9 @@ package com.example.server.service;
 import com.example.server.dto.AnalysisTaskMsg;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
+import com.example.server.utils.AnalysisRedisKeys;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
+import org.redisson.api.RLock;
 import org.redisson.api.RRateLimiter;
 import org.redisson.api.RateIntervalUnit;
 import org.redisson.api.RateType;
@@ -11,8 +13,9 @@ import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -20,10 +23,10 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class MediaAnalysisTaskService {
 
+    private static final Logger log = LoggerFactory.getLogger(MediaAnalysisTaskService.class);
+
     private static final String DEFAULT_GOAL = "Understand the core video content and generate a structured analysis report";
     private static final String ANALYSIS_TOPIC = "video-analysis-topic";
-    private static final String ACTIVE_KEY_PREFIX = "analysis:active:";
-    private static final String MEDIA_MD5_KEY_PREFIX = "media:md5:";
     private static final String GLOBAL_LIMIT_KEY = "limit:ai:global";
 
     @Autowired
@@ -60,7 +63,7 @@ public class MediaAnalysisTaskService {
         }
 
         String contentHash = resolveContentHash(file);
-        String activeKey = ACTIVE_KEY_PREFIX + contentHash;
+        String activeKey = AnalysisRedisKeys.active(currentUserId, contentHash);
         Boolean accepted = redisTemplate.opsForValue()
                 .setIfAbsent(activeKey, String.valueOf(mediaId), 2, TimeUnit.HOURS);
 
@@ -79,7 +82,8 @@ public class MediaAnalysisTaskService {
             mediaFileMapper.updateById(file);
             clearMediaListCache(file);
 
-            AnalysisTaskMsg msg = new AnalysisTaskMsg(mediaId, "START_ANALYSIS", contentHash, userGoal);
+            AnalysisTaskMsg msg = new AnalysisTaskMsg(
+                    mediaId, currentUserId, "START_ANALYSIS", contentHash, userGoal);
             rocketMQTemplate.convertAndSend(ANALYSIS_TOPIC, msg);
 
             result.put("status", "SUBMITTED");
@@ -106,31 +110,104 @@ public class MediaAnalysisTaskService {
         }
     }
 
-    private String resolveContentHash(MediaFile file) {
-        String redisKey = MEDIA_MD5_KEY_PREFIX + file.getId();
-        String contentHash = redisTemplate.opsForValue().get(redisKey);
-        if (isMd5(contentHash)) {
-            return contentHash;
-        }
+    String resolveContentHash(MediaFile file) {
+        String redisHash = redisTemplate.opsForValue().get(AnalysisRedisKeys.contentHash(file.getId()));
+        String databaseHash = file.getContentHash();
 
-        String filePath = file.getFilePath();
-        if (filePath != null && !filePath.startsWith("http")) {
-            File localFile = new File(filePath);
-            if (localFile.isFile()) {
-                try {
-                    contentHash = mediaService.calculateMd5(localFile);
-                    mediaService.rememberContentHash(file.getId(), contentHash);
-                    return contentHash;
-                } catch (Exception ignored) {
-                }
+        if (AnalysisRedisKeys.isMd5(redisHash)) {
+            if (AnalysisRedisKeys.isMd5(databaseHash) && !databaseHash.equals(redisHash)) {
+                log.warn("contentHash cache mismatch for mediaId={}; using MySQL value", file.getId());
+                mediaService.rememberContentHash(file.getId(), databaseHash);
+                return databaseHash;
             }
+            if (!AnalysisRedisKeys.isMd5(databaseHash)) {
+                persistContentHash(file, redisHash);
+                mediaService.rememberContentHash(file.getId(), redisHash);
+            }
+            return redisHash;
         }
 
-        return "media-" + file.getId();
+        if (AnalysisRedisKeys.isMd5(databaseHash)) {
+            mediaService.rememberContentHash(file.getId(), databaseHash);
+            return databaseHash;
+        }
+        if (databaseHash != null && !databaseHash.isBlank()) {
+            log.warn("Ignoring invalid MySQL contentHash for mediaId={}", file.getId());
+        }
+
+        return calculateAndPersistHistoricalHash(file);
     }
 
-    private boolean isMd5(String value) {
-        return value != null && value.matches("[a-f0-9]{32}");
+    private String calculateAndPersistHistoricalHash(MediaFile originalFile) {
+        RLock lock = redissonClient.getLock(AnalysisRedisKeys.contentHashLock(originalFile.getId()));
+        lock.lock();
+        try {
+            MediaFile latest = mediaFileMapper.selectById(originalFile.getId());
+            if (latest == null) {
+                throw new MediaNotFoundException("media not found while resolving contentHash");
+            }
+
+            String redisHash = redisTemplate.opsForValue()
+                    .get(AnalysisRedisKeys.contentHash(latest.getId()));
+            String databaseHash = latest.getContentHash();
+            if (AnalysisRedisKeys.isMd5(redisHash)) {
+                if (AnalysisRedisKeys.isMd5(databaseHash) && !databaseHash.equals(redisHash)) {
+                    log.warn("contentHash cache mismatch for mediaId={}; using MySQL value", latest.getId());
+                    mediaService.rememberContentHash(latest.getId(), databaseHash);
+                    return databaseHash;
+                }
+                if (!AnalysisRedisKeys.isMd5(databaseHash)) {
+                    persistContentHash(latest, redisHash);
+                    mediaService.rememberContentHash(latest.getId(), redisHash);
+                }
+                return redisHash;
+            }
+            if (AnalysisRedisKeys.isMd5(databaseHash)) {
+                mediaService.rememberContentHash(latest.getId(), databaseHash);
+                return databaseHash;
+            }
+
+            String calculatedHash;
+            try {
+                calculatedHash = mediaService.calculateStoredContentHash(latest);
+            } catch (Exception e) {
+                String fallback = AnalysisRedisKeys.legacyContentHash(latest.getId());
+                log.warn("Unable to calculate historical contentHash for mediaId={}; "
+                                + "using non-persistent fallback {}. Reason: {}",
+                        latest.getId(), fallback, e.getMessage());
+                return fallback;
+            }
+
+            if (!AnalysisRedisKeys.isMd5(calculatedHash)) {
+                throw new IllegalStateException("calculated contentHash is not a valid MD5");
+            }
+            persistContentHash(latest, calculatedHash);
+            mediaService.rememberContentHash(latest.getId(), calculatedHash);
+            log.info("Backfilled contentHash for historical mediaId={}", latest.getId());
+            return calculatedHash;
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+
+    private void persistContentHash(MediaFile file, String contentHash) {
+        if (!AnalysisRedisKeys.isMd5(contentHash)) {
+            throw new IllegalArgumentException("only a valid MD5 may be persisted as contentHash");
+        }
+        MediaFile patch = new MediaFile();
+        patch.setId(file.getId());
+        patch.setContentHash(contentHash);
+        try {
+            if (mediaFileMapper.updateById(patch) != 1) {
+                throw new IllegalStateException("failed to persist contentHash for mediaId=" + file.getId());
+            }
+        } catch (RuntimeException e) {
+            mediaService.forgetContentHash(file.getId());
+            throw e;
+        }
+        file.setContentHash(contentHash);
     }
 
     private void clearMediaListCache(MediaFile file) {

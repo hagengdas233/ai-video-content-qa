@@ -133,6 +133,7 @@ public class MediaController {
             mediaFile.setUploadTime(LocalDateTime.now());
 
             mediaFile.setUserId(currentUserId);
+            mediaFile.setContentHash(md5);
 
             mediaFileMapper.insert(mediaFile);
             mediaService.rememberContentHash(mediaFile.getId(), md5);
@@ -174,6 +175,7 @@ public class MediaController {
             mediaFile.setUploadTime(LocalDateTime.now());
 
             mediaFile.setUserId(currentUserId);
+            mediaFile.setContentHash(md5);
 
             mediaFileMapper.insert(mediaFile);
             mediaService.rememberContentHash(mediaFile.getId(), md5);
@@ -266,6 +268,7 @@ public class MediaController {
         }
 
         mediaFileMapper.deleteById(id);
+        mediaService.forgetContentHash(id);
 
         if (media.getUserId() != null) {
             String cacheKey = "media:list:user:" + media.getUserId();
