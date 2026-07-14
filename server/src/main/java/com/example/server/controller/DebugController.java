@@ -5,6 +5,7 @@ import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
 import com.example.server.service.AiService;
 import com.example.server.strategy.AiAnalysisStrategy;
+import com.example.server.utils.AnalysisRedisKeys;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.FileSystemResource;
@@ -79,11 +80,13 @@ public class DebugController {
                 return "任务已在后台运行，无需重复提交";
             }
 
-            String contentHash = redisTemplate.opsForValue().get("media:md5:" + id);
-            if (contentHash == null || !contentHash.matches("[a-f0-9]{32}")) {
-                contentHash = "media-" + id;
+            String contentHash = redisTemplate.opsForValue().get(AnalysisRedisKeys.contentHash(id));
+            if (!AnalysisRedisKeys.isMd5(contentHash)) {
+                contentHash = AnalysisRedisKeys.isMd5(file.getContentHash())
+                        ? file.getContentHash()
+                        : AnalysisRedisKeys.legacyContentHash(id);
             }
-            activeKey = "analysis:active:" + contentHash;
+            activeKey = AnalysisRedisKeys.active(file.getUserId(), contentHash);
             Boolean accepted = redisTemplate.opsForValue()
                     .setIfAbsent(activeKey, String.valueOf(id), 2, TimeUnit.HOURS);
             if (!Boolean.TRUE.equals(accepted)) {
@@ -97,7 +100,8 @@ public class DebugController {
             redisTemplate.delete("media:list:user:" + userIdKey);
 
             //发送消息
-            AnalysisTaskMsg msg = new AnalysisTaskMsg(id, "START_ANALYSIS", contentHash, goal);
+            AnalysisTaskMsg msg = new AnalysisTaskMsg(
+                    id, file.getUserId(), "START_ANALYSIS", contentHash, goal);
             rocketMQTemplate.convertAndSend("video-analysis-topic", msg);
 
             return "✅ 任务已投递至 RocketMQ！";

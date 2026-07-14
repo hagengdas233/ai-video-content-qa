@@ -4,6 +4,8 @@
 @user2Username = <user-2-username>
 @user2Password = <user-2-password>
 @user1MediaId = <media-id-owned-by-user-1>
+@user2SameContentMediaId = <same-content-media-id-owned-by-user-2>
+@expectedContentHash = <lowercase-32-character-md5>
 
 ### 1. User 1 login and capture the signed JWT
 # @name user1Login
@@ -158,6 +160,50 @@ client.test("Duplicate analysis reports RUNNING", function () {
   client.assert(response.status === 202, "Expected HTTP 202");
   client.assert(response.body.status === "RUNNING", "Expected RUNNING");
   client.assert(response.body.message === "Analysis task is already running", "Expected duplicate message");
+});
+%}
+
+### 9. Redis miss must fall back to media_files.content_hash and repopulate the cache
+# Preconditions:
+# 1. media_files.content_hash for user1MediaId equals expectedContentHash.
+# 2. DEL media:md5:{user1MediaId} and any non-running analysis key.
+POST {{host}}/media/analyze/{{user1MediaId}}
+Authorization: Bearer {{user1Token}}
+Content-Type: application/json
+
+{}
+
+> {%
+client.test("MySQL contentHash is used when Redis cache is empty", function () {
+  client.assert(response.status === 202, "Expected HTTP 202");
+  client.assert(response.body.contentHash === request.variables.get("expectedContentHash"), "Expected MySQL MD5");
+});
+%}
+
+### 10. Historical NULL content_hash must be recalculated and persisted
+# Set only the chosen test row content_hash to NULL, delete media:md5:{mediaId}, then submit.
+# For a reachable MinIO/local object, verify MySQL and Redis are both backfilled with the returned MD5.
+POST {{host}}/media/analyze/{{user1MediaId}}
+Authorization: Bearer {{user1Token}}
+Content-Type: application/json
+
+{}
+
+### 11. User 2 may submit the same content independently
+# Both rows must have the same expectedContentHash. Expected keys:
+# analysis:active:{user1Id}:{expectedContentHash}
+# analysis:active:{user2Id}:{expectedContentHash}
+POST {{host}}/media/analyze/{{user2SameContentMediaId}}
+Authorization: Bearer {{user2Token}}
+Content-Type: application/json
+
+{}
+
+> {%
+client.test("Same content owned by another user is independently accepted", function () {
+  client.assert(response.status === 202, "Expected HTTP 202");
+  client.assert(response.body.status === "SUBMITTED", "Expected independent SUBMITTED task");
+  client.assert(response.body.contentHash === request.variables.get("expectedContentHash"), "Expected shared MD5");
 });
 %}
 

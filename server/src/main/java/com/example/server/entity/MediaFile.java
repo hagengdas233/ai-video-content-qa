@@ -18,6 +18,7 @@ public class MediaFile {
     private String filename;
     private String status;        //UPLOADED, COMPLETED
     private String filePath;
+    private String contentHash;
 
     //下面这几个是新加的
     private String aiSummary;

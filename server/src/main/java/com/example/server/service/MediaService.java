@@ -2,7 +2,10 @@ package com.example.server.service;
 
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
+import com.example.server.utils.AnalysisRedisKeys;
 import com.example.server.utils.MinioUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -33,6 +36,8 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class MediaService {
 
+    private static final Logger log = LoggerFactory.getLogger(MediaService.class);
+
     //注入数据库操作接口 (MyBatis-Plus 自动代理)
     @Autowired
     private MediaFileMapper mediaFileMapper;
@@ -45,7 +50,7 @@ public class MediaService {
 
     private final String UPLOAD_DIR = "D:/Project/MediaApp/uploads/";
     private static final String CHUNK_UPLOAD_KEY_PREFIX = "upload:chunked:";
-    private static final String MEDIA_MD5_KEY_PREFIX = "media:md5:";
+    static final long CONTENT_HASH_CACHE_HOURS = 24;
     private static final Path CHUNK_UPLOAD_DIR = Path.of(System.getProperty("java.io.tmpdir"), "dovideo-chunks");
 
     public MediaService() {
@@ -138,6 +143,7 @@ public class MediaService {
                 Files.copy(part, output);
             }
         }
+        String contentHash = HexFormat.of().formatHex(digest.digest());
 
         String fileUrl = minioUtils.uploadLocalFile(mergedFile.toFile(), filename);
         try {
@@ -150,9 +156,10 @@ public class MediaService {
             if (userId != null) {
                 mediaFile.setUserId(Long.valueOf(String.valueOf(userId)));
             }
+            mediaFile.setContentHash(contentHash);
             mediaFileMapper.insert(mediaFile);
 
-            rememberContentHash(mediaFile.getId(), HexFormat.of().formatHex(digest.digest()));
+            rememberContentHash(mediaFile.getId(), contentHash);
             if (mediaFile.getUserId() != null) {
                 redisTemplate.delete("media:list:user:" + mediaFile.getUserId());
             }
@@ -176,8 +183,43 @@ public class MediaService {
         }
     }
 
+    public String calculateStoredContentHash(MediaFile mediaFile) throws Exception {
+        if (mediaFile == null || mediaFile.getFilePath() == null || mediaFile.getFilePath().isBlank()) {
+            throw new IOException("stored media path is missing");
+        }
+
+        String filePath = mediaFile.getFilePath();
+        if (filePath.startsWith("http://") || filePath.startsWith("https://")) {
+            try (InputStream inputStream = minioUtils.openStoredFile(filePath)) {
+                return calculateMd5(inputStream);
+            }
+        }
+
+        File localFile = new File(filePath);
+        if (!localFile.isFile()) {
+            throw new IOException("stored media file is not accessible: " + filePath);
+        }
+        return calculateMd5(localFile);
+    }
+
     public void rememberContentHash(Long mediaId, String md5) {
-        redisTemplate.opsForValue().set(MEDIA_MD5_KEY_PREFIX + mediaId, md5);
+        if (!AnalysisRedisKeys.isMd5(md5)) {
+            throw new IllegalArgumentException("contentHash must be a lowercase 32-character MD5");
+        }
+        try {
+            redisTemplate.opsForValue().set(
+                    AnalysisRedisKeys.contentHash(mediaId), md5, CONTENT_HASH_CACHE_HOURS, TimeUnit.HOURS);
+        } catch (RuntimeException e) {
+            log.warn("Failed to cache contentHash for mediaId={}; MySQL remains authoritative", mediaId, e);
+        }
+    }
+
+    public void forgetContentHash(Long mediaId) {
+        try {
+            redisTemplate.delete(AnalysisRedisKeys.contentHash(mediaId));
+        } catch (RuntimeException e) {
+            log.warn("Failed to remove contentHash cache for deleted mediaId={}", mediaId, e);
+        }
     }
 
     private String calculateMd5(InputStream inputStream) throws IOException {
