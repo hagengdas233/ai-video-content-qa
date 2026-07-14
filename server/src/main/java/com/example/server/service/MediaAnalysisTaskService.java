@@ -101,10 +101,7 @@ public class MediaAnalysisTaskService {
 
     private void verifyOwner(MediaFile file, Long currentUserId) {
         Long ownerId = file.getUserId();
-        if (ownerId == null) {
-            return;
-        }
-        if (currentUserId == null || !ownerId.equals(currentUserId)) {
+        if (currentUserId == null || ownerId == null || !ownerId.equals(currentUserId)) {
             throw new AccessDeniedException("no permission to analyze this media");
         }
     }

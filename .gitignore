@@ -1,6 +1,7 @@
 # Local Docker data directories
 /minio/
 /mysql/
+/output/
 .idea/
 .env
 .env.*

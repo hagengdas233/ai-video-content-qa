@@ -1,5 +1,6 @@
 package com.example.server.controller;
 
+import com.example.server.auth.UserContext;
 import com.example.server.entity.KnowledgeDocument;
 import com.example.server.service.KnowledgeDocumentService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,10 +28,9 @@ public class KnowledgeDocumentController {
     private KnowledgeDocumentService knowledgeDocumentService;
 
     @PostMapping("/upload")
-    public ResponseEntity<?> upload(@RequestParam("file") MultipartFile file,
-                                    @RequestParam(value = "userId", required = false) Long userId) {
+    public ResponseEntity<?> upload(@RequestParam("file") MultipartFile file) {
         try {
-            Long currentUserId = resolveUserId(userId);
+            Long currentUserId = UserContext.requireUserId();
             KnowledgeDocument document = knowledgeDocumentService.uploadAndProcess(file, currentUserId);
 
             Map<String, Object> result = new HashMap<>();
@@ -47,17 +47,14 @@ public class KnowledgeDocumentController {
     }
 
     @GetMapping("/list")
-    public List<KnowledgeDocument> list(@RequestParam(value = "userId", required = false) Long userId) {
-        Long currentUserId = resolveUserId(userId);
-        return knowledgeDocumentService.listByUser(currentUserId);
+    public List<KnowledgeDocument> list() {
+        return knowledgeDocumentService.listByUser(UserContext.requireUserId());
     }
 
     @DeleteMapping("/document/{documentId}")
-    public ResponseEntity<?> delete(@PathVariable Long documentId,
-                                    @RequestParam(value = "userId", required = false) Long userId) {
+    public ResponseEntity<?> delete(@PathVariable Long documentId) {
         try {
-            Long currentUserId = resolveUserId(userId);
-            knowledgeDocumentService.deleteDocument(documentId, currentUserId);
+            knowledgeDocumentService.deleteDocument(documentId, UserContext.requireUserId());
             return ResponseEntity.ok("删除成功");
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
@@ -67,8 +64,4 @@ public class KnowledgeDocumentController {
         }
     }
 
-    private Long resolveUserId(Long userId) {
-        // TODO: Replace with the real authenticated user after the project has unified auth.
-        return userId == null ? 1L : userId;
-    }
 }

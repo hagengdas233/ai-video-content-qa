@@ -202,14 +202,14 @@
 
                     <button
                         class="dock-item ai-core"
-                        :disabled="item.status !== 'COMPLETED'"
+                        :disabled="item.status !== 'COMPLETED' || isAnalysisSubmitting(item.id)"
                         @click="aiAnalyze(item.id)"
                     >
                       <span class="item-icon">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
                       </span>
                       <div class="label-group">
-                        <span class="item-label">AI 总结</span>
+                        <span class="item-label">{{ isAnalysisSubmitting(item.id) ? '提交中...' : 'AI 总结' }}</span>
                       </div>
                       <div class="shimmer"></div>
                     </button>
@@ -376,7 +376,9 @@ const authMessage = ref('')
 const authError = ref(false)
 const authForm = ref({ username: '', password: '', nickname: '' })
 const pollingTimers = ref({})
-const ragUserId = 1
+const AUTH_TOKEN_STORAGE_KEY = 'authToken'
+const authToken = ref(localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '')
+const analysisSubmitting = ref({})
 const ragFile = ref(null)
 const ragDocuments = ref([])
 const ragQuestion = ref('')
@@ -387,6 +389,12 @@ const ragListLoading = ref(false)
 const ragAsking = ref(false)
 const ragMessage = ref('')
 const ragError = ref(false)
+
+const authenticatedFetch = (url, options = {}) => {
+  const headers = new Headers(options.headers || {})
+  if (authToken.value) headers.set('Authorization', `Bearer ${authToken.value}`)
+  return fetch(url, { ...options, headers })
+}
 
 // Markdown 解析
 const renderedMarkdown = computed(() => {
@@ -446,7 +454,7 @@ const uploadFile = async () => {
     let uploadedChunks = new Set()
 
     if (uploadId) {
-      const statusRes = await fetch(`http://localhost:9090/media/upload-status?uploadId=${encodeURIComponent(uploadId)}`)
+      const statusRes = await authenticatedFetch(`http://localhost:9090/media/upload-status?uploadId=${encodeURIComponent(uploadId)}`)
       if (statusRes.ok) {
         uploadedChunks = new Set(await statusRes.json())
       } else {
@@ -458,10 +466,9 @@ const uploadFile = async () => {
     if (!uploadId) {
       const params = new URLSearchParams({
         filename: selectedFile.name,
-        totalChunks: String(totalChunks),
-        userId: String(currentUser.value.id)
+        totalChunks: String(totalChunks)
       })
-      const initRes = await fetch(`http://localhost:9090/media/init-upload?${params}`, { method: 'POST' })
+      const initRes = await authenticatedFetch(`http://localhost:9090/media/init-upload?${params}`, { method: 'POST' })
       const initText = await initRes.text()
       if (!initRes.ok) throw new Error(initText || 'Failed to initialize upload')
       uploadId = initText
@@ -478,7 +485,7 @@ const uploadFile = async () => {
       formData.append('totalChunks', String(totalChunks))
       formData.append('file', selectedFile.slice(index * CHUNK_SIZE, Math.min(selectedFile.size, (index + 1) * CHUNK_SIZE)))
 
-      const chunkRes = await fetch('http://localhost:9090/media/upload-chunk', {
+      const chunkRes = await authenticatedFetch('http://localhost:9090/media/upload-chunk', {
         method: 'POST',
         body: formData
       })
@@ -487,7 +494,7 @@ const uploadFile = async () => {
 
     message.value = '分片上传完成，正在合并文件...'
     const completeParams = new URLSearchParams({ uploadId })
-    const completeRes = await fetch(`http://localhost:9090/media/complete-upload?${completeParams}`, { method: 'POST' })
+    const completeRes = await authenticatedFetch(`http://localhost:9090/media/complete-upload?${completeParams}`, { method: 'POST' })
     if (!completeRes.ok) throw new Error(await completeRes.text() || 'Upload merge failed')
 
     localStorage.removeItem(storageKey)
@@ -522,10 +529,9 @@ const handleUrlUpload = async () => {
 
   const formData = new FormData()
   formData.append('url', videoUrl.value)
-  if (currentUser.value) formData.append('userId', currentUser.value.id)
 
   try {
-    const res = await fetch('http://localhost:9090/media/upload-url', {
+    const res = await authenticatedFetch('http://localhost:9090/media/upload-url', {
       method: 'POST',
       body: formData
     })
@@ -583,7 +589,7 @@ const uploadRagDocument = async () => {
   formData.append('file', ragFile.value)
 
   try {
-    const res = await fetch(`http://localhost:9090/knowledge/upload?userId=${ragUserId}`, {
+    const res = await authenticatedFetch('http://localhost:9090/knowledge/upload', {
       method: 'POST',
       body: formData
     })
@@ -605,7 +611,7 @@ const uploadRagDocument = async () => {
 const fetchRagDocuments = async () => {
   ragListLoading.value = true
   try {
-    const res = await fetch(`http://localhost:9090/knowledge/list?userId=${ragUserId}`)
+    const res = await authenticatedFetch('http://localhost:9090/knowledge/list')
     if (!res.ok) throw new Error(await res.text() || '文档列表加载失败')
     ragDocuments.value = await res.json()
   } catch (error) {
@@ -621,7 +627,7 @@ const deleteRagDocument = async (doc) => {
   if (!confirm(`确认删除知识库文档 "${doc.originalFilename}" 吗？`)) return
 
   try {
-    const res = await fetch(`http://localhost:9090/knowledge/document/${doc.id}?userId=${ragUserId}`, {
+    const res = await authenticatedFetch(`http://localhost:9090/knowledge/document/${doc.id}`, {
       method: 'DELETE'
     })
     const text = await res.text()
@@ -653,11 +659,10 @@ const askRag = async () => {
   sidebar.value.content = '正在检索知识库并生成回答...'
 
   try {
-    const res = await fetch('http://localhost:9090/knowledge/ask', {
+    const res = await authenticatedFetch('http://localhost:9090/knowledge/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        userId: ragUserId,
         question: ragQuestion.value.trim(),
         topK: 5
       })
@@ -691,9 +696,9 @@ const fetchList = async () => {
     if (currentUser.value) {
       // 【核心修改】加一个 _t 时间戳，强制浏览器每次都发新请求，不许读缓存！
       const timestamp = new Date().getTime()
-      url += `?userId=${currentUser.value.id}&_t=${timestamp}`
+      url += `?_t=${timestamp}`
 
-      const res = await fetch(url)
+      const res = await authenticatedFetch(url)
       const data = await res.json()
       // 倒序排列，新的在前面
       list.value = data.reverse()
@@ -708,9 +713,8 @@ const fetchList = async () => {
 const deleteItem = async (item) => {
   if (!confirm(`确认要永久删除 "${item.filename}" 吗？`)) return
   try {
-    let url = `http://localhost:9090/media/delete?id=${item.id}`
-    if (currentUser.value) url += `&userId=${currentUser.value.id}`
-    const res = await fetch(url, { method: 'DELETE' })
+    const url = `http://localhost:9090/media/delete?id=${item.id}`
+    const res = await authenticatedFetch(url, { method: 'DELETE' })
     const text = await res.text()
     if (text === '删除成功') {
       showMsg('文件已销毁')
@@ -778,12 +782,52 @@ const transcribe = async (id) => {
   }
 }
 
-// === 【核心修改】AI 分析函数，增加限流/锁错误的处理 ===
+const isAnalysisSubmitting = (id) => Boolean(analysisSubmitting.value[id])
+
+const setAnalysisSubmitting = (id, submitting) => {
+  const next = { ...analysisSubmitting.value }
+  if (submitting) next[id] = true
+  else delete next[id]
+  analysisSubmitting.value = next
+}
+
+const clearAuthenticatedSession = () => {
+  currentUser.value = null
+  authToken.value = ''
+  localStorage.removeItem('user')
+  localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+  list.value = []
+  ragDocuments.value = []
+  ragAnswer.value = ''
+  ragSources.value = []
+}
+
+const parseResponseBody = async (response) => {
+  const text = await response.text()
+  if (!text) return { data: null, message: '' }
+  try {
+    const data = JSON.parse(text)
+    return { data, message: data.message || data.msg || text }
+  } catch (_) {
+    return { data: null, message: text }
+  }
+}
+
+const isAnalysisPlaceholder = (summary) => {
+  if (!summary) return false
+  const normalized = summary.toLowerCase()
+  return summary.includes('任务已')
+      || summary.includes('正在')
+      || normalized.includes('[mq]')
+      || normalized.includes('queued')
+}
+
+// 正式 AI 分析入口：登录 Token -> 归属校验 -> 限流/防重 -> RocketMQ。
 const aiAnalyze = async (id, force = false) => {
   const item = list.value.find(i => i.id === id)
 
   // 1. 如果已经有结果，直接显示
-  if (!force && item && item.aiSummary && !item.aiSummary.includes("任务已") && !item.aiSummary.includes("正在")) {
+  if (!force && item && item.aiSummary && !isAnalysisPlaceholder(item.aiSummary)) {
     openSidebar('ai', 'AI 智能总结')
     sidebar.value.content = item.aiSummary
     sidebar.value.loading = false
@@ -798,35 +842,71 @@ const aiAnalyze = async (id, force = false) => {
     return
   }
 
+  // Vue 的 disabled 更新前仍可能收到第二次点击，因此函数入口也做同步防并发。
+  if (isAnalysisSubmitting(id)) return
+
+  if (!currentUser.value || !authToken.value) {
+    showMsg('⚠️ 请重新登录后再提交分析任务', true)
+    openAuthModal()
+    return
+  }
+
   // 3. 准备提交请求，打开侧边栏loading
+  setAnalysisSubmitting(id, true)
   openSidebar('ai', 'AI 智能总结')
   sidebar.value.loading = true
-  sidebar.value.content = "🚀 正在向分布式集群请求计算资源..."
+  sidebar.value.content = "🚀 正在提交正式分析任务..."
 
   try {
-    // 请求后端
-    const res = await fetch(`http://localhost:9090/debug/ai?id=${id}`)
-    const text = await res.text()
+    const res = await authenticatedFetch(`http://localhost:9090/media/analyze/${id}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({})
+    })
+    const { data, message: responseMessage } = await parseResponseBody(res)
 
-    // 4. 【关键逻辑】检查后端返回的文本
-    // 如果包含 "⚠️" (限流/锁) 或者 "❌" (报错)，说明任务被拒绝了
-    if (text.includes("⚠️") || text.includes("❌")) {
-      // 弹窗提示错误
-      showMsg(text, true)
-      // 关闭侧边栏，因为任务其实没开始
+    if (res.status === 401) {
+      clearAuthenticatedSession()
       sidebar.value.visible = false
       sidebar.value.loading = false
+      showMsg('⚠️ 登录已失效，请重新登录', true)
+      openAuthModal()
       return
     }
 
-    // 5. 如果成功 (包含 "✅" 或 "🚀")，开始轮询
+    if (res.status === 403) {
+      sidebar.value.loading = false
+      sidebar.value.content = responseMessage || '无权分析该视频'
+      showMsg('⚠️ 无权分析该视频', true)
+      return
+    }
+
+    if (!res.ok) {
+      sidebar.value.loading = false
+      sidebar.value.content = responseMessage || `分析任务提交失败（HTTP ${res.status}）`
+      showMsg(`❌ ${sidebar.value.content}`, true)
+      return
+    }
+
+    const status = data?.status
+    if (status === 'RUNNING') {
+      const duplicateMessage = responseMessage || 'Analysis task is already running'
+      showMsg(`⚠️ ${duplicateMessage}`, true)
+      sidebar.value.content = `${duplicateMessage}\n\n⏳ 已存在运行中的任务，继续等待处理结果...`
+    } else {
+      showMsg('✅ 任务已提交')
+      sidebar.value.content = `${responseMessage || '任务已提交'}\n\n⏳ 等待消费者接单处理...`
+    }
     startPolling(id, 'ai')
-    // 在侧边栏显示后端返回的提示 (比如 "✅ 任务已投递至 RocketMQ")
-    sidebar.value.content = text + "\n\n⏳ 等待消费者接单处理..."
 
   } catch (e) {
-    sidebar.value.content = "Error: " + e
+    sidebar.value.content = "Error: " + (e?.message || e)
     sidebar.value.loading = false
+    showMsg('❌ 分析请求失败，请检查网络或后端服务', true)
+  } finally {
+    setAnalysisSubmitting(id, false)
   }
 }
 
@@ -936,11 +1016,15 @@ const handleAuth = async () => {
     const data = await res.json()
     if (data.code === 200) {
       if (authMode.value === 'login') {
+        if (!data.token) throw new Error('登录响应缺少 token')
         currentUser.value = data.userInfo
+        authToken.value = data.token
         localStorage.setItem('user', JSON.stringify(data.userInfo))
+        localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token)
         closeAuthModal()
         showMsg(`欢迎回来，${data.userInfo.nickname}`)
         fetchList()
+        fetchRagDocuments()
       } else {
         authMessage.value = '注册成功，请直接登录'
         authError.value = false
@@ -959,20 +1043,26 @@ const handleAuth = async () => {
   }
 }
 const logout = () => {
-  currentUser.value = null
-  localStorage.removeItem('user')
-  list.value = []
+  clearAuthenticatedSession()
   showMsg('已退出系统')
 }
 onMounted(() => {
   const savedUser = localStorage.getItem('user')
-  if (savedUser) {
+  const savedToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+  if (savedUser && savedToken) {
     try {
       currentUser.value = JSON.parse(savedUser)
-    } catch(e) {}
+      authToken.value = savedToken
+    } catch(e) {
+      clearAuthenticatedSession()
+    }
+  } else if (savedUser || savedToken) {
+    clearAuthenticatedSession()
   }
-  fetchList()
-  fetchRagDocuments()
+  if (currentUser.value && authToken.value) {
+    fetchList()
+    fetchRagDocuments()
+  }
 })
 </script>
 

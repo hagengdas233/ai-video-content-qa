@@ -1,52 +1,172 @@
 @host = http://localhost:9090
-@mediaId = 1
-@token = <token-from-login>
-@otherToken = <other-user-token>
+@user1Username = <user-1-username>
+@user1Password = <user-1-password>
+@user2Username = <user-2-username>
+@user2Password = <user-2-password>
+@user1MediaId = <media-id-owned-by-user-1>
 
-### Submit a formal video analysis task
-POST {{host}}/media/analyze/{{mediaId}}
-Authorization: Bearer {{token}}
+### 1. User 1 login and capture the signed JWT
+# @name user1Login
+POST {{host}}/user/login
 Content-Type: application/json
 
 {
-  "goal": "Summarize the core ideas of this video and return structured conclusions with evidence."
+  "username": "{{user1Username}}",
+  "password": "{{user1Password}}"
 }
 
-### Duplicate submission check
-POST {{host}}/media/analyze/{{mediaId}}
-Authorization: Bearer {{token}}
+> {%
+client.test("User 1 login returned a JWT", function () {
+  client.assert(response.status === 200, "Expected HTTP 200");
+  client.assert(response.body.code === 200, "Expected business code 200");
+  client.assert(response.body.token, "Expected token in login response");
+  client.assert(response.body.token.split(".").length === 3, "Expected compact JWT format");
+});
+client.global.set("user1Token", response.body.token);
+const index = Math.floor(response.body.token.length / 2);
+const current = response.body.token.charAt(index);
+const replacement = current === "a" ? "b" : "a";
+client.global.set(
+  "tamperedUser1Token",
+  response.body.token.substring(0, index) + replacement + response.body.token.substring(index + 1)
+);
+%}
+
+### User 2 login and capture its own signed JWT
+# @name user2Login
+POST {{host}}/user/login
 Content-Type: application/json
 
 {
-  "goal": "Summarize the core ideas of this video."
+  "username": "{{user2Username}}",
+  "password": "{{user2Password}}"
 }
 
-### Missing token should return 401
-POST {{host}}/media/analyze/{{mediaId}}
+> {%
+client.test("User 2 login returned a JWT", function () {
+  client.assert(response.status === 200, "Expected HTTP 200");
+  client.assert(response.body.code === 200, "Expected business code 200");
+  client.assert(response.body.token.split(".").length === 3, "Expected compact JWT format");
+});
+client.global.set("user2Token", response.body.token);
+%}
+
+### 2. User 1 analyzes a video owned by User 1
+# @name firstAnalysis
+POST {{host}}/media/analyze/{{user1MediaId}}
+Authorization: Bearer {{user1Token}}
+Content-Type: application/json
+
+{}
+
+> {%
+client.test("First analysis is accepted", function () {
+  client.assert(response.status === 202, "Expected HTTP 202");
+  client.assert(response.body.status === "SUBMITTED", "Expected SUBMITTED");
+});
+%}
+
+### 3. Missing token must return HTTP 401
+POST {{host}}/media/analyze/{{user1MediaId}}
+Content-Type: application/json
+
+{}
+
+> {%
+client.test("Missing token is rejected", function () {
+  client.assert(response.status === 401, "Expected HTTP 401");
+});
+%}
+
+### 4. The old forgeable demo token must return HTTP 401
+POST {{host}}/media/analyze/{{user1MediaId}}
+Authorization: Bearer user_1
+Content-Type: application/json
+
+{}
+
+> {%
+client.test("Forged user_1 token is rejected", function () {
+  client.assert(response.status === 401, "Expected HTTP 401");
+});
+%}
+
+### 5. A one-character JWT modification must return HTTP 401
+POST {{host}}/media/analyze/{{user1MediaId}}
+Authorization: Bearer {{tamperedUser1Token}}
+Content-Type: application/json
+
+{}
+
+> {%
+client.test("Tampered JWT is rejected", function () {
+  client.assert(response.status === 401, "Expected HTTP 401");
+});
+%}
+
+### 6a. Expired JWT preparation
+# Restart the backend temporarily with JWT_EXPIRATION=1, then run this login request.
+# @name expiringLogin
+POST {{host}}/user/login
 Content-Type: application/json
 
 {
-  "goal": "This request should return 401 because Authorization is missing."
+  "username": "{{user1Username}}",
+  "password": "{{user1Password}}"
 }
 
-### Permission check: use a token for a user that does not own the media
-POST {{host}}/media/analyze/{{mediaId}}
-Authorization: Bearer {{otherToken}}
+> {%
+client.global.set("expiredToken", response.body.token);
+%}
+
+### 6b. Wait briefly, then the expired JWT must return HTTP 401
+# Restore JWT_EXPIRATION to 86400000 after this test.
+POST {{host}}/media/analyze/{{user1MediaId}}
+Authorization: Bearer {{expiredToken}}
 Content-Type: application/json
 
-{
-  "goal": "This request should return 403 if the media belongs to another user."
-}
+{}
 
-### userId in query/body is ignored by the formal endpoint
-POST {{host}}/media/analyze/{{mediaId}}?userId=999
-Authorization: Bearer {{token}}
+> {%
+client.test("Expired JWT is rejected", function () {
+  client.assert(response.status === 401, "Expected HTTP 401");
+});
+%}
+
+### 7. User 2 cannot analyze User 1's video
+POST {{host}}/media/analyze/{{user1MediaId}}
+Authorization: Bearer {{user2Token}}
 Content-Type: application/json
 
-{
-  "userId": 999,
-  "goal": "The server should use Authorization token user, not this forged userId."
-}
+{}
 
-### Existing debug endpoint is still available
-GET {{host}}/debug/ai?id={{mediaId}}&goal=Debug analysis task
+> {%
+client.test("Cross-user access is rejected", function () {
+  client.assert(response.status === 403, "Expected HTTP 403");
+});
+%}
+
+### 8. Repeat immediately after request 2; no second MQ task should be sent
+POST {{host}}/media/analyze/{{user1MediaId}}
+Authorization: Bearer {{user1Token}}
+Content-Type: application/json
+
+{}
+
+> {%
+client.test("Duplicate analysis reports RUNNING", function () {
+  client.assert(response.status === 202, "Expected HTTP 202");
+  client.assert(response.body.status === "RUNNING", "Expected RUNNING");
+  client.assert(response.body.message === "Analysis task is already running", "Expected duplicate message");
+});
+%}
+
+### Authenticated media list; userId is taken from UserContext, not query parameters
+GET {{host}}/media/list
+Authorization: Bearer {{user1Token}}
+
+### Debug endpoint with dev profile: remains outside JWT interception
+GET {{host}}/debug/ai?id={{user1MediaId}}&goal=Debug analysis task
+
+### Debug endpoint without dev profile: must return 404
+GET {{host}}/debug/ai?id={{user1MediaId}}&goal=Debug analysis task

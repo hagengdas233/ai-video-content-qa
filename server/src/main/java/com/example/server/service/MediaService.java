@@ -60,23 +60,28 @@ public class MediaService {
         if (totalChunks <= 0) {
             throw new IllegalArgumentException("totalChunks must be greater than 0");
         }
+        if (userId == null) {
+            throw new IllegalArgumentException("userId is required");
+        }
 
         String uploadId = UUID.randomUUID().toString();
         String redisKey = CHUNK_UPLOAD_KEY_PREFIX + uploadId;
         Map<String, String> metadata = new HashMap<>();
         metadata.put("filename", filename);
         metadata.put("totalChunks", String.valueOf(totalChunks));
-        if (userId != null) {
-            metadata.put("userId", String.valueOf(userId));
-        }
+        metadata.put("userId", String.valueOf(userId));
         redisTemplate.opsForHash().putAll(redisKey, metadata);
         refreshChunkUploadTtl(uploadId);
         Files.createDirectories(uploadDirectory(uploadId));
         return uploadId;
     }
 
-    public Set<Integer> getUploadedChunks(String uploadId) {
-        requireUpload(uploadId);
+    public Set<Integer> getUploadedChunks(String uploadId, Long currentUserId) {
+        requireOwnedUpload(uploadId, currentUserId);
+        return getUploadedChunks(uploadId);
+    }
+
+    private Set<Integer> getUploadedChunks(String uploadId) {
         Set<String> members = redisTemplate.opsForSet().members(partsKey(uploadId));
         Set<Integer> result = new TreeSet<>();
         if (members != null) {
@@ -87,12 +92,16 @@ public class MediaService {
         return result;
     }
 
-    public void uploadChunk(String uploadId, int chunkIndex, int totalChunks, MultipartFile chunk) throws IOException {
+    public void uploadChunk(String uploadId,
+                            int chunkIndex,
+                            int totalChunks,
+                            MultipartFile chunk,
+                            Long currentUserId) throws IOException {
         if (chunk == null || chunk.isEmpty()) {
             throw new IllegalArgumentException("chunk is empty");
         }
 
-        Map<Object, Object> metadata = requireUpload(uploadId);
+        Map<Object, Object> metadata = requireOwnedUpload(uploadId, currentUserId);
         int expectedChunks = Integer.parseInt(String.valueOf(metadata.get("totalChunks")));
         if (totalChunks != expectedChunks || chunkIndex < 0 || chunkIndex >= expectedChunks) {
             throw new IllegalArgumentException("invalid chunk index or totalChunks");
@@ -105,8 +114,8 @@ public class MediaService {
         refreshChunkUploadTtl(uploadId);
     }
 
-    public MediaFile completeChunkedUpload(String uploadId) throws Exception {
-        Map<Object, Object> metadata = requireUpload(uploadId);
+    public MediaFile completeChunkedUpload(String uploadId, Long currentUserId) throws Exception {
+        Map<Object, Object> metadata = requireOwnedUpload(uploadId, currentUserId);
         String filename = String.valueOf(metadata.get("filename"));
         int totalChunks = Integer.parseInt(String.valueOf(metadata.get("totalChunks")));
         Path directory = uploadDirectory(uploadId);
@@ -199,6 +208,16 @@ public class MediaService {
         return metadata;
     }
 
+    private Map<Object, Object> requireOwnedUpload(String uploadId, Long currentUserId) {
+        Map<Object, Object> metadata = requireUpload(uploadId);
+        Object ownerId = metadata.get("userId");
+        if (currentUserId == null || ownerId == null
+                || !String.valueOf(currentUserId).equals(String.valueOf(ownerId))) {
+            throw new AccessDeniedException("no permission to access this upload");
+        }
+        return metadata;
+    }
+
     private Path uploadDirectory(String uploadId) {
         try {
             UUID.fromString(uploadId);
@@ -240,6 +259,12 @@ public class MediaService {
             }
         }
         redisTemplate.delete(List.of(CHUNK_UPLOAD_KEY_PREFIX + uploadId, partsKey(uploadId)));
+    }
+
+    public static class AccessDeniedException extends RuntimeException {
+        public AccessDeniedException(String message) {
+            super(message);
+        }
     }
 
     public String convertVideoToAudio(MultipartFile file) throws IOException, InterruptedException {

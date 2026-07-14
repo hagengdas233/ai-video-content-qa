@@ -1,5 +1,6 @@
 package com.example.server.controller;
 
+import com.example.server.auth.UserContext;
 import com.example.server.service.KnowledgeRetrievalService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -26,10 +27,10 @@ public class KnowledgeRetrievalController {
             if (request == null) {
                 return ResponseEntity.badRequest().body("request body is required");
             }
-            Long userId = resolveUserId(request.get("userId"));
             String question = request.get("question") == null ? null : String.valueOf(request.get("question"));
             Integer topK = parseInteger(request.get("topK"));
-            List<Map<String, Object>> results = knowledgeRetrievalService.search(userId, question, topK);
+            List<Map<String, Object>> results = knowledgeRetrievalService.search(
+                    UserContext.requireUserId(), question, topK);
             return ResponseEntity.ok(results);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
@@ -37,14 +38,6 @@ public class KnowledgeRetrievalController {
             e.printStackTrace();
             return ResponseEntity.status(500).body("Search failed: " + e.getMessage());
         }
-    }
-
-    private Long resolveUserId(Object userId) {
-        // TODO: Replace with the real authenticated user after the project has unified auth.
-        if (userId == null) {
-            return 1L;
-        }
-        return Long.valueOf(String.valueOf(userId));
     }
 
     private Integer parseInteger(Object value) {

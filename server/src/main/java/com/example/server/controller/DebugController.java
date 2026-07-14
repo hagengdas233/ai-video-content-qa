@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
+import org.springframework.context.annotation.Profile;
 import org.springframework.data.redis.core.StringRedisTemplate; // 【修复】导入 Redis 类
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -25,6 +26,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit; //导入时间单位
 
 @RestController
+@Profile("dev")
 @RequestMapping("/debug")
 @CrossOrigin(originPatterns = "*", allowCredentials = "true")
 public class DebugController {

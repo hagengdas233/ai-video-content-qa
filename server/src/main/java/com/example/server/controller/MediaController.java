@@ -1,10 +1,9 @@
 package com.example.server.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.example.server.auth.UserContext;
 import com.example.server.entity.MediaFile;
-import com.example.server.entity.User;
 import com.example.server.mapper.MediaFileMapper;
-import com.example.server.mapper.UserMapper;
 import com.example.server.service.MediaAnalysisTaskService;
 import com.example.server.service.MediaService;
 import com.example.server.utils.MinioUtils;
@@ -13,7 +12,6 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -32,9 +30,6 @@ public class MediaController {
 
     @Autowired(required = false)
     private MediaFileMapper mediaFileMapper;
-
-    @Autowired(required = false)
-    private UserMapper userMapper;
 
     @Autowired
     private StringRedisTemplate redisTemplate;
@@ -56,10 +51,10 @@ public class MediaController {
 
     @PostMapping("/init-upload")
     public ResponseEntity<String> initUpload(@RequestParam String filename,
-                                             @RequestParam int totalChunks,
-                                             @RequestParam(value = "userId", required = false) Long userId) {
+                                             @RequestParam int totalChunks) {
         try {
-            return ResponseEntity.ok(mediaService.initChunkedUpload(filename, totalChunks, userId));
+            return ResponseEntity.ok(mediaService.initChunkedUpload(
+                    filename, totalChunks, UserContext.requireUserId()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
@@ -71,8 +66,11 @@ public class MediaController {
     @GetMapping("/upload-status")
     public ResponseEntity<?> uploadStatus(@RequestParam String uploadId) {
         try {
-            Set<Integer> uploadedChunks = mediaService.getUploadedChunks(uploadId);
+            Set<Integer> uploadedChunks = mediaService.getUploadedChunks(
+                    uploadId, UserContext.requireUserId());
             return ResponseEntity.ok(uploadedChunks);
+        } catch (MediaService.AccessDeniedException e) {
+            return ResponseEntity.status(403).body(e.getMessage());
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         }
@@ -84,8 +82,11 @@ public class MediaController {
                                               @RequestParam int totalChunks,
                                               @RequestParam("file") MultipartFile file) {
         try {
-            mediaService.uploadChunk(uploadId, chunkIndex, totalChunks, file);
+            mediaService.uploadChunk(
+                    uploadId, chunkIndex, totalChunks, file, UserContext.requireUserId());
             return ResponseEntity.ok("Chunk uploaded");
+        } catch (MediaService.AccessDeniedException e) {
+            return ResponseEntity.status(403).body(e.getMessage());
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
@@ -97,8 +98,10 @@ public class MediaController {
     @PostMapping("/complete-upload")
     public ResponseEntity<String> completeUpload(@RequestParam String uploadId) {
         try {
-            mediaService.completeChunkedUpload(uploadId);
+            mediaService.completeChunkedUpload(uploadId, UserContext.requireUserId());
             return ResponseEntity.ok("Upload success");
+        } catch (MediaService.AccessDeniedException e) {
+            return ResponseEntity.status(403).body(e.getMessage());
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
@@ -109,8 +112,7 @@ public class MediaController {
 
 
     @PostMapping("/upload")
-    public ResponseEntity<String> upload(@RequestParam("file") MultipartFile file,
-                                         @RequestParam(value = "userId", required = false) Long userId) {
+    public ResponseEntity<String> upload(@RequestParam("file") MultipartFile file) {
         if (file == null || file.isEmpty()) {
             return ResponseEntity.badRequest().body("Upload failed: file is empty");
         }
@@ -118,6 +120,7 @@ public class MediaController {
             return ResponseEntity.status(500).body("Upload failed: database not ready");
         }
         try {
+            Long currentUserId = UserContext.requireUserId();
             String md5 = mediaService.calculateMd5(file);
             System.out.println("Uploading to MinIO...");
             String fileUrl = minioUtils.uploadFile(file);
@@ -129,18 +132,14 @@ public class MediaController {
             mediaFile.setStatus("COMPLETED");
             mediaFile.setUploadTime(LocalDateTime.now());
 
-            if (userId != null) {
-                mediaFile.setUserId(userId);
-            }
+            mediaFile.setUserId(currentUserId);
 
             mediaFileMapper.insert(mediaFile);
             mediaService.rememberContentHash(mediaFile.getId(), md5);
 
-            if (userId != null) {
-                String cacheKey = "media:list:user:" + userId;
-                redisTemplate.delete(cacheKey);
-                System.out.println("Cache cleared: " + cacheKey);
-            }
+            String cacheKey = "media:list:user:" + currentUserId;
+            redisTemplate.delete(cacheKey);
+            System.out.println("Cache cleared: " + cacheKey);
 
             return ResponseEntity.ok("Upload success");
 
@@ -151,10 +150,10 @@ public class MediaController {
     }
 
     @PostMapping("/upload-url")
-    public org.springframework.http.ResponseEntity<String> uploadUrl(@RequestParam("url") String url,
-                                                                     @RequestParam(value = "userId", required = false) Long userId) {
+    public org.springframework.http.ResponseEntity<String> uploadUrl(@RequestParam("url") String url) {
         File tempFile = null;
         try {
+            Long currentUserId = UserContext.requireUserId();
             if (url == null || url.isBlank()) {
                 return org.springframework.http.ResponseEntity.badRequest().body("Upload failed: url is empty");
             }
@@ -174,18 +173,14 @@ public class MediaController {
             mediaFile.setStatus("COMPLETED");
             mediaFile.setUploadTime(LocalDateTime.now());
 
-            if (userId != null) {
-                mediaFile.setUserId(userId);
-            }
+            mediaFile.setUserId(currentUserId);
 
             mediaFileMapper.insert(mediaFile);
             mediaService.rememberContentHash(mediaFile.getId(), md5);
 
-            if (userId != null) {
-                String cacheKey = "media:list:user:" + userId;
-                redisTemplate.delete(cacheKey);
-                System.out.println("Cache cleared: " + cacheKey);
-            }
+            String cacheKey = "media:list:user:" + currentUserId;
+            redisTemplate.delete(cacheKey);
+            System.out.println("Cache cleared: " + cacheKey);
 
             return org.springframework.http.ResponseEntity.ok("Upload success");
 
@@ -201,10 +196,9 @@ public class MediaController {
 
     @PostMapping("/analyze/{mediaId}")
     public ResponseEntity<?> analyze(@PathVariable Long mediaId,
-                                     @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
                                      @RequestBody(required = false) Map<String, Object> request) {
         try {
-            Long currentUserId = resolveCurrentUserId(authorization);
+            Long currentUserId = UserContext.requireUserId();
             String goal = request == null || request.get("goal") == null
                     ? null
                     : String.valueOf(request.get("goal"));
@@ -217,8 +211,6 @@ public class MediaController {
             return ResponseEntity.status(403).body(e.getMessage());
         } catch (MediaAnalysisTaskService.RateLimitExceededException e) {
             return ResponseEntity.status(429).body(e.getMessage());
-        } catch (UnauthorizedException e) {
-            return ResponseEntity.status(401).body(e.getMessage());
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
@@ -228,8 +220,9 @@ public class MediaController {
     }
 
     @GetMapping("/list")
-    public List<MediaFile> getList(@RequestParam(value = "userId", required = false) Long userId) {
-        String cacheKey = "media:list:user:" + (userId == null ? "anon" : userId);
+    public List<MediaFile> getList() {
+        Long currentUserId = UserContext.requireUserId();
+        String cacheKey = "media:list:user:" + currentUserId;
 
         try {
             String json = redisTemplate.opsForValue().get(cacheKey);
@@ -242,11 +235,7 @@ public class MediaController {
         }
 
         QueryWrapper<MediaFile> query = new QueryWrapper<>();
-        if (userId != null) {
-            query.eq("user_id", userId);
-        } else {
-            return List.of();
-        }
+        query.eq("user_id", currentUserId);
         List<MediaFile> list = mediaFileMapper.selectList(query.orderByDesc("id"));
 
         try {
@@ -262,14 +251,14 @@ public class MediaController {
 
     //删除接口
     @DeleteMapping("/delete")
-    public String delete(@RequestParam("id") Long id,
-                         @RequestParam(value = "userId", required = false) Long userId) {
+    public ResponseEntity<String> delete(@RequestParam("id") Long id) {
+        Long currentUserId = UserContext.requireUserId();
 
         MediaFile media = mediaFileMapper.selectById(id);
-        if (media == null) return "文件不存在";
+        if (media == null) return ResponseEntity.status(404).body("文件不存在");
 
-        if (userId != null && !media.getUserId().equals(userId)) {
-            return "无权删除他人的文件";
+        if (media.getUserId() == null || !media.getUserId().equals(currentUserId)) {
+            return ResponseEntity.status(403).body("无权删除他人的文件");
         }
 
         if (media.getFilePath() != null && media.getFilePath().startsWith("http")) {
@@ -284,36 +273,6 @@ public class MediaController {
             System.out.println("缓存已清除: " + cacheKey);
         }
 
-        return "删除成功";
-    }
-
-    private Long resolveCurrentUserId(String authorization) {
-        if (authorization == null || authorization.isBlank()) {
-            throw new UnauthorizedException("login required");
-        }
-
-        String token = authorization.trim();
-        if (token.regionMatches(true, 0, "Bearer ", 0, 7)) {
-            token = token.substring(7).trim();
-        }
-        if (!token.matches("user_\\d+")) {
-            throw new UnauthorizedException("invalid token");
-        }
-
-        Long userId = Long.valueOf(token.substring("user_".length()));
-        if (userMapper == null) {
-            throw new UnauthorizedException("user service is not ready");
-        }
-        User user = userMapper.selectById(userId);
-        if (user == null) {
-            throw new UnauthorizedException("invalid token");
-        }
-        return userId;
-    }
-
-    private static class UnauthorizedException extends RuntimeException {
-        private UnauthorizedException(String message) {
-            super(message);
-        }
+        return ResponseEntity.ok("删除成功");
     }
 }

@@ -1,6 +1,7 @@
 package com.example.server.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.example.server.auth.JwtUtil;
 import com.example.server.entity.User;
 import com.example.server.mapper.UserMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +18,9 @@ public class UserController {
 
     @Autowired(required = false)
     private UserMapper userMapper;
+
+    @Autowired
+    private JwtUtil jwtUtil;
 
     //注册接口
     @PostMapping("/register")
@@ -76,9 +80,11 @@ public class UserController {
                 result.put("code", 401);
                 result.put("msg", "账号或密码错误");
             } else {
+                String token = jwtUtil.generateToken(dbUser);
+                dbUser.setPassword(null);
                 result.put("code", 200);
                 result.put("msg", "登录成功");
-                result.put("token", "user_" + dbUser.getId());
+                result.put("token", token);
                 result.put("userInfo", dbUser);
             }
         } catch (Exception e) {
