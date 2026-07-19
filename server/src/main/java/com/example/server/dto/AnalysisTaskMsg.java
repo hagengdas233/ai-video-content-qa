@@ -9,15 +9,18 @@ public class AnalysisTaskMsg implements Serializable {
     private String action; //例如"START_ANALYSIS"
     private String contentHash;
     private String userGoal;
+    private String analysisRequestId;
 
     public AnalysisTaskMsg() {}
 
-    public AnalysisTaskMsg(Long mediaId, Long userId, String action, String contentHash, String userGoal) {
+    public AnalysisTaskMsg(Long mediaId, Long userId, String action, String contentHash,
+                           String userGoal, String analysisRequestId) {
         this.mediaId = mediaId;
         this.userId = userId;
         this.action = action;
         this.contentHash = contentHash;
         this.userGoal = userGoal;
+        this.analysisRequestId = analysisRequestId;
     }
 
     public Long getMediaId() { return mediaId; }
@@ -30,4 +33,6 @@ public class AnalysisTaskMsg implements Serializable {
     public void setContentHash(String contentHash) { this.contentHash = contentHash; }
     public String getUserGoal() { return userGoal; }
     public void setUserGoal(String userGoal) { this.userGoal = userGoal; }
+    public String getAnalysisRequestId() { return analysisRequestId; }
+    public void setAnalysisRequestId(String analysisRequestId) { this.analysisRequestId = analysisRequestId; }
 }

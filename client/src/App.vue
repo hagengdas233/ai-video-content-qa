@@ -177,6 +177,9 @@
                         <span class="status-indicator" :class="item.status.toLowerCase()">
                           {{ item.status === 'COMPLETED' ? 'READY' : 'PROCESSING' }}
                         </span>
+                        <span class="analysis-indicator" :class="analysisStatusClass(item)">
+                          {{ analysisStatusLabel(item) }}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -212,6 +215,14 @@
                         <span class="item-label">{{ isAnalysisSubmitting(item.id) ? '提交中...' : 'AI 总结' }}</span>
                       </div>
                       <div class="shimmer"></div>
+                    </button>
+                    <button
+                        v-if="displayableAiSummary(item)"
+                        class="dock-item reanalyze"
+                        :disabled="item.status !== 'COMPLETED' || isAnalysisSubmitting(item.id) || isAnalysisRunning(item)"
+                        @click="confirmReanalysis(item)"
+                    >
+                      <span class="item-label">重新分析</span>
                     </button>
                   </div>
                 </div>
@@ -298,8 +309,12 @@
               <div class="result-empty-icon">AI</div>
               <p>选择视频任务生成总结，或在知识库中提问，AI 结果会显示在这里。</p>
             </div>
-            <div v-else-if="sidebar.loading" class="loading-state"><div class="quantum-loader small"></div><p>数据流处理中...</p></div>
-            <div v-else>
+            <template v-else>
+              <div v-if="sidebar.statusText" class="analysis-notice" :class="sidebar.statusTone">
+                {{ sidebar.statusText }}
+              </div>
+              <div v-if="sidebar.loading" class="loading-state"><div class="quantum-loader small"></div><p>数据流处理中...</p></div>
+              <div v-else>
               <div v-if="sidebar.type === 'ai' || sidebar.type === 'rag'" class="markdown-content" v-html="renderedMarkdown"></div>
               <div v-else class="text-content"><pre>{{ sidebar.content }}</pre></div>
 
@@ -313,7 +328,8 @@
                   <pre>{{ source.content }}</pre>
                 </details>
               </div>
-            </div>
+              </div>
+            </template>
           </div>
         </aside>
       </div>
@@ -367,7 +383,15 @@ const uploading = ref(false)
 const list = ref([])
 const isDragOver = ref(false)
 const activeWorkspace = ref('video')
-const sidebar = ref({ visible: false, type: 'ai', title: '', content: '', loading: false })
+const sidebar = ref({
+  visible: false,
+  type: 'ai',
+  title: '',
+  content: '',
+  loading: false,
+  statusText: '',
+  statusTone: ''
+})
 const currentUser = ref(null)
 const showAuthModal = ref(false)
 const authMode = ref('login')
@@ -813,32 +837,101 @@ const parseResponseBody = async (response) => {
   }
 }
 
-const isAnalysisPlaceholder = (summary) => {
-  if (!summary) return false
-  const normalized = summary.toLowerCase()
-  return summary.includes('任务已')
-      || summary.includes('正在')
-      || normalized.includes('[mq]')
-      || normalized.includes('queued')
+const LEGACY_ANALYSIS_QUEUE_PLACEHOLDERS = new Set([
+  '[MQ] Analysis task queued',
+  '[MQ] 已进入消息队列，等待调度...'
+])
+const LEGACY_ANALYSIS_FAILURE_PREFIX = '❌ 分析失败:'
+
+const isLegacyAnalysisPlaceholder = (summary) => {
+  if (!summary || !summary.trim()) return false
+  const value = summary.trim()
+  return LEGACY_ANALYSIS_QUEUE_PLACEHOLDERS.has(value)
+      || value.startsWith(LEGACY_ANALYSIS_FAILURE_PREFIX)
+}
+
+const isLegacyAnalysisFailure = (summary) => (
+  Boolean(summary?.trim().startsWith(LEGACY_ANALYSIS_FAILURE_PREFIX))
+)
+
+const displayableAiSummary = (item) => (
+  isLegacyAnalysisPlaceholder(item?.aiSummary) ? '' : (item?.aiSummary || '')
+)
+
+const effectiveAnalysisStatus = (item) => {
+  if (item?.analysisStatus && item.analysisStatus !== 'NOT_STARTED') return item.analysisStatus
+  if (isLegacyAnalysisFailure(item?.aiSummary)) return 'FAILED'
+  if (displayableAiSummary(item)) return 'SUCCESS'
+  return item?.analysisStatus || 'NOT_STARTED'
+}
+
+const isAnalysisRunning = (item) => ['QUEUED', 'RUNNING'].includes(effectiveAnalysisStatus(item))
+
+const analysisStatusLabel = (item) => ({
+  NOT_STARTED: '未分析',
+  QUEUED: '排队中',
+  RUNNING: '分析中',
+  SUCCESS: '已完成',
+  FAILED: '分析失败'
+}[effectiveAnalysisStatus(item)] || '未分析')
+
+const analysisStatusClass = (item) => effectiveAnalysisStatus(item).toLowerCase()
+
+const setAnalysisNotice = (status, reanalysis = false, error = '') => {
+  if (status === 'QUEUED') {
+    sidebar.value.statusText = reanalysis ? '正在重新分析：任务已进入队列，当前展示上一次结果。' : '分析任务已进入队列。'
+    sidebar.value.statusTone = 'running'
+  } else if (status === 'RUNNING') {
+    sidebar.value.statusText = reanalysis ? '正在重新分析，当前展示上一次结果。' : 'AI 分析正在进行。'
+    sidebar.value.statusTone = 'running'
+  } else if (status === 'SUCCESS') {
+    sidebar.value.statusText = 'AI 分析已完成。'
+    sidebar.value.statusTone = 'success'
+  } else if (status === 'FAILED') {
+    sidebar.value.statusText = error ? `分析失败：${error}` : '分析失败；已有旧结果不会被覆盖。'
+    sidebar.value.statusTone = 'error'
+  } else {
+    sidebar.value.statusText = ''
+    sidebar.value.statusTone = ''
+  }
+}
+
+const confirmReanalysis = async (item) => {
+  if (!item || !confirm(`确认重新分析 "${item.filename}" 吗？\n\n重新分析会产生新的 ASR/OCR/大模型调用，完成前仍可查看旧结果。`)) return
+  await aiAnalyze(item.id, true)
 }
 
 // 正式 AI 分析入口：登录 Token -> 归属校验 -> 限流/防重 -> RocketMQ。
 const aiAnalyze = async (id, force = false) => {
   const item = list.value.find(i => i.id === id)
+  const currentStatus = effectiveAnalysisStatus(item)
+  const existingSummary = displayableAiSummary(item)
 
-  // 1. 如果已经有结果，直接显示
-  if (!force && item && item.aiSummary && !isAnalysisPlaceholder(item.aiSummary)) {
+  // 已有成功结果时，普通操作只展示结果；重新分析必须显式 force=true。
+  if (!force && existingSummary && currentStatus === 'SUCCESS') {
     openSidebar('ai', 'AI 智能总结')
-    sidebar.value.content = item.aiSummary
+    sidebar.value.content = existingSummary
     sidebar.value.loading = false
+    setAnalysisNotice('SUCCESS')
     return
   }
 
-  // 2. 如果正在轮询，直接打开侧边栏
-  if (pollingTimers.value[id] && pollingTimers.value[id].type === 'ai') {
+  // 持久化状态是 QUEUED/RUNNING 时不重复提交；有旧结果则继续展示旧结果。
+  if (isAnalysisRunning(item) || (pollingTimers.value[id] && pollingTimers.value[id].type === 'ai')) {
     openSidebar('ai', 'AI 智能总结')
-    sidebar.value.loading = true
-    sidebar.value.content = "🚀 系统正在后台拼命计算中...\n\n(任务正在进行，无需重复提交)"
+    sidebar.value.content = existingSummary
+    sidebar.value.loading = !sidebar.value.content
+    setAnalysisNotice(currentStatus === 'QUEUED' ? 'QUEUED' : 'RUNNING', Boolean(existingSummary))
+    if (!pollingTimers.value[id]) startPolling(id, 'ai')
+    return
+  }
+
+  // 失败后仍保留的旧结果默认只展示；重新执行需点击“重新分析”。
+  if (!force && existingSummary) {
+    openSidebar('ai', 'AI 智能总结')
+    sidebar.value.content = existingSummary
+    sidebar.value.loading = false
+    setAnalysisNotice(currentStatus, false, item.analysisError)
     return
   }
 
@@ -854,11 +947,15 @@ const aiAnalyze = async (id, force = false) => {
   // 3. 准备提交请求，打开侧边栏loading
   setAnalysisSubmitting(id, true)
   openSidebar('ai', 'AI 智能总结')
-  sidebar.value.loading = true
-  sidebar.value.content = "🚀 正在提交正式分析任务..."
+  sidebar.value.content = existingSummary
+  sidebar.value.loading = !sidebar.value.content
+  sidebar.value.statusText = force && sidebar.value.content
+      ? '正在提交重新分析任务，当前展示上一次结果。'
+      : '正在提交正式分析任务。'
+  sidebar.value.statusTone = 'running'
 
   try {
-    const res = await authenticatedFetch(`http://localhost:9090/media/analyze/${id}`, {
+    const res = await authenticatedFetch(`http://localhost:9090/media/analyze/${id}?force=${force}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -891,13 +988,21 @@ const aiAnalyze = async (id, force = false) => {
     }
 
     const status = data?.status
-    if (status === 'RUNNING') {
+    if (status === 'REUSED') {
+      await fetchList()
+      const reusedItem = list.value.find(i => i.id === id)
+      sidebar.value.content = displayableAiSummary(reusedItem) || existingSummary
+      sidebar.value.loading = false
+      setAnalysisNotice('SUCCESS')
+      showMsg('已复用现有分析结果')
+      return
+    } else if (status === 'RUNNING') {
       const duplicateMessage = responseMessage || 'Analysis task is already running'
       showMsg(`⚠️ ${duplicateMessage}`, true)
-      sidebar.value.content = `${duplicateMessage}\n\n⏳ 已存在运行中的任务，继续等待处理结果...`
+      setAnalysisNotice('RUNNING', Boolean(sidebar.value.content))
     } else {
       showMsg('✅ 任务已提交')
-      sidebar.value.content = `${responseMessage || '任务已提交'}\n\n⏳ 等待消费者接单处理...`
+      setAnalysisNotice('QUEUED', force && Boolean(sidebar.value.content))
     }
     startPolling(id, 'ai')
 
@@ -925,18 +1030,19 @@ const startPolling = (id, type) => {
     let result = ''
 
     if (type === 'ai') {
-      const text = item.aiSummary || ''
-
-      // 【核心修改】纯文本判断逻辑，绝对不使用 Emoji
-      // 条件1: 成功 (包含 Markdown 的标题特征 "##")
-      const isSuccess = text.includes("##");
-      // 条件2: 失败 (包含错误关键词)
-      const isError = text.includes("失败") || text.includes("Error") || text.includes("超时") || text.includes("500");
-
-      // 只要是成功或失败，都视为“结束”，停止轮询
-      if (isSuccess || isError) {
+      const status = effectiveAnalysisStatus(item)
+      const currentSummary = displayableAiSummary(item)
+      if (status === 'SUCCESS' || status === 'FAILED') {
         isFinished = true
-        result = text
+        result = currentSummary
+      } else if (status === 'QUEUED' || status === 'RUNNING') {
+        if (sidebar.value.visible && sidebar.value.type === 'ai') {
+          if (currentSummary) {
+            sidebar.value.content = currentSummary
+            sidebar.value.loading = false
+          }
+          setAnalysisNotice(status, Boolean(currentSummary))
+        }
       }
 
     } else if (type === 'text') {
@@ -952,12 +1058,15 @@ const startPolling = (id, type) => {
     if (isFinished) {
       // 如果侧边栏正开着，更新内容
       if (sidebar.value.visible && sidebar.value.title.includes(type === 'ai' ? 'AI' : '文字')) {
-        sidebar.value.content = result
+        if (result) sidebar.value.content = result
         sidebar.value.loading = false
+        if (type === 'ai') {
+          const status = effectiveAnalysisStatus(item)
+          setAnalysisNotice(status, false, item.analysisError)
+        }
       }
 
-      // 只有成功才提示完成，报错则提示警告
-      if (result.includes("失败") || result.includes("Error")) {
+      if (type === 'ai' && effectiveAnalysisStatus(item) === 'FAILED') {
         showMsg("⚠️ 任务结束，但存在错误", true)
       } else {
         showMsg("✅ 任务完成")
@@ -985,6 +1094,8 @@ const openSidebar = (type, title) => {
   sidebar.value.title = title
   sidebar.value.loading = true
   sidebar.value.content = ''
+  sidebar.value.statusText = ''
+  sidebar.value.statusTone = ''
 }
 const closeSidebar = () => { sidebar.value.visible = false }
 
@@ -1229,8 +1340,12 @@ html, body, #app {
 .status-indicator { font-weight: 600; padding: 2px 8px; border-radius: 4px; }
 .status-indicator.completed { color: var(--accent-success); border: 1px solid var(--accent-success); background: rgba(90, 242, 141, 0.1); }
 .status-indicator.processing { color: var(--accent-purple); border: 1px solid var(--accent-purple); animation: blink 1s infinite; }
+.analysis-indicator { font-weight: 600; padding: 2px 8px; border: 1px solid var(--border-tech); border-radius: 4px; }
+.analysis-indicator.queued, .analysis-indicator.running { color: var(--accent-purple); border-color: var(--accent-purple); }
+.analysis-indicator.success { color: var(--accent-success); border-color: var(--accent-success); }
+.analysis-indicator.failed { color: #ff8b96; border-color: #ff4757; }
 
-.action-dock { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 12px; background: rgba(8, 15, 30, 0.64); }
+.action-dock { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 12px; background: rgba(8, 15, 30, 0.64); }
 .dock-item { position: relative; min-width: 0; border: 1px solid var(--border-tech); background: var(--bg-card); border-radius: 8px; padding: 12px 8px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; transition: all 0.3s; color: var(--text-sub); font-family: monospace; overflow: hidden; white-space: nowrap; }
 .dock-item svg { flex: 0 0 auto; }
 .item-label { white-space: nowrap; }
@@ -1241,6 +1356,8 @@ html, body, #app {
 .dock-item.ai-core .item-sub { font-size: 0.75rem; color: var(--accent-purple); opacity: 0.8; }
 .dock-item.ai-core:hover:not(:disabled) { border-color: var(--accent-lime); color: var(--text-inverse); background: var(--accent-lime); }
 .dock-item.ai-core:hover:not(:disabled) .item-sub { color: var(--text-inverse); }
+.dock-item.reanalyze { color: #ffcc66; border-color: rgba(255, 204, 102, 0.55); }
+.dock-item.reanalyze:hover:not(:disabled) { color: #15100a; background: #ffcc66; border-color: #ffcc66; }
 
 /* RAG */
 .rag-section { margin-top: 4rem; opacity: 0; animation: slideUpFade 0.8s 0.5s forwards; }
@@ -1416,6 +1533,10 @@ html, body, #app {
 .result-panel .sidebar-header { padding: 16px 18px; }
 .result-panel .sidebar-title { font-size: 1rem; min-width: 0; }
 .result-panel .sidebar-body { padding: 18px; }
+.analysis-notice { margin-bottom: 14px; padding: 10px 12px; border: 1px solid var(--border-tech); border-radius: 6px; color: var(--text-sub); background: rgba(8, 15, 30, 0.7); }
+.analysis-notice.running { color: var(--accent-purple); border-color: rgba(124, 58, 237, 0.65); }
+.analysis-notice.success { color: var(--accent-success); border-color: rgba(90, 242, 141, 0.55); }
+.analysis-notice.error { color: #ff8b96; border-color: rgba(255, 71, 87, 0.65); }
 .result-empty {
   min-height: 320px; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 14px; color: var(--text-sub); text-align: center; line-height: 1.7;
@@ -1453,7 +1574,7 @@ html, body, #app {
   .skew-pane, .pane-content, .split-gap { transform: none; }
   .pane-local, .pane-url { margin: 0; padding: 18px; border-right: none; }
   .pane-local { border-bottom: 1px solid var(--border-tech); }
-  .action-dock { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .action-dock { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .dock-item { padding: 10px 6px; font-size: 0.78rem; gap: 5px; }
 }
 

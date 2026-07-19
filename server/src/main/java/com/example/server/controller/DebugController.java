@@ -1,17 +1,15 @@
 package com.example.server.controller;
 
-import com.example.server.dto.AnalysisTaskMsg;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
 import com.example.server.service.AiService;
+import com.example.server.service.MediaAnalysisTaskService;
 import com.example.server.strategy.AiAnalysisStrategy;
-import com.example.server.utils.AnalysisRedisKeys;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.context.annotation.Profile;
-import org.springframework.data.redis.core.StringRedisTemplate; // 【修复】导入 Redis 类
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -44,73 +42,22 @@ public class DebugController {
 
 
     @Autowired
-    private StringRedisTemplate redisTemplate;
-
-    @Autowired
-    private org.apache.rocketmq.spring.core.RocketMQTemplate rocketMQTemplate;
-
-    @Autowired
-    private org.redisson.api.RedissonClient redissonClient;
+    private MediaAnalysisTaskService mediaAnalysisTaskService;
 
     //AI总结接口(分布式锁 + 限流 + MQ)
     @GetMapping("/ai")
     public String aiAnalyze(@RequestParam Long id,
-                            @RequestParam(defaultValue = "理解视频核心内容并生成结构化分析报告") String goal) {
-        String activeKey = null;
-
+                            @RequestParam(defaultValue = "理解视频核心内容并生成结构化分析报告") String goal,
+                            @RequestParam(defaultValue = "false") boolean force) {
         try {
-            if (goal.isBlank() || goal.length() > 500) {
-                return "❌ 分析目标不能为空且不能超过 500 字";
-            }
-            // 这里演示：全局限制每分钟只能分析 10 次 (防止费用爆炸)
-            String limitKey = "limit:ai:global";
-            org.redisson.api.RRateLimiter rateLimiter = redissonClient.getRateLimiter(limitKey);
-            //初始化：每 1 分钟产生 10 个令牌 (RateType.OVERALL 全局, OVER_CLIENT 是单机)
-            rateLimiter.trySetRate(org.redisson.api.RateType.OVERALL, 10, 1, org.redisson.api.RateIntervalUnit.MINUTES);
-
-            //尝试获取 1 个令牌
-            if (!rateLimiter.tryAcquire(1)) {
-                return "⚠️ 系统繁忙(限流中)，请 1 分钟后再试！";
-            }
-
-            //查库校验
             MediaFile file = mediaFileMapper.selectById(id);
             if (file == null) return "文件不存在";
-            if (file.getAiSummary() != null && file.getAiSummary().contains("正在")) {
-                return "任务已在后台运行，无需重复提交";
-            }
-
-            String contentHash = redisTemplate.opsForValue().get(AnalysisRedisKeys.contentHash(id));
-            if (!AnalysisRedisKeys.isMd5(contentHash)) {
-                contentHash = AnalysisRedisKeys.isMd5(file.getContentHash())
-                        ? file.getContentHash()
-                        : AnalysisRedisKeys.legacyContentHash(id);
-            }
-            activeKey = AnalysisRedisKeys.active(file.getUserId(), contentHash);
-            Boolean accepted = redisTemplate.opsForValue()
-                    .setIfAbsent(activeKey, String.valueOf(id), 2, TimeUnit.HOURS);
-            if (!Boolean.TRUE.equals(accepted)) {
-                return "⚠️ 相同视频正在分析，请勿重复提交！";
-            }
-
-            //更新状态
-            file.setAiSummary("[MQ] 已进入消息队列，等待调度...");
-            mediaFileMapper.updateById(file);
-            String userIdKey = (file.getUserId() == null) ? "anon" : String.valueOf(file.getUserId());
-            redisTemplate.delete("media:list:user:" + userIdKey);
-
-            //发送消息
-            AnalysisTaskMsg msg = new AnalysisTaskMsg(
-                    id, file.getUserId(), "START_ANALYSIS", contentHash, goal);
-            rocketMQTemplate.convertAndSend("video-analysis-topic", msg);
-
-            return "✅ 任务已投递至 RocketMQ！";
+            return mediaAnalysisTaskService
+                    .submitAnalysis(id, file.getUserId(), goal, force)
+                    .toString();
 
         } catch (Exception e) {
             e.printStackTrace();
-            if (activeKey != null) {
-                redisTemplate.delete(activeKey);
-            }
             return "❌ 提交失败: " + e.getMessage();
         }
     }
