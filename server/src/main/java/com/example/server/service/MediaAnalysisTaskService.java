@@ -1,6 +1,7 @@
 package com.example.server.service;
 
 import com.example.server.dto.AnalysisTaskMsg;
+import com.example.server.entity.AnalysisStatus;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
 import com.example.server.utils.AnalysisRedisKeys;
@@ -18,7 +19,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Service
 public class MediaAnalysisTaskService {
@@ -44,18 +47,35 @@ public class MediaAnalysisTaskService {
     @Autowired
     private RedissonClient redissonClient;
 
+    @Autowired
+    private AnalysisActiveKeyService activeKeyService;
+
     public Map<String, Object> submitAnalysis(Long mediaId, Long currentUserId, String goal) {
+        return submitAnalysis(mediaId, currentUserId, goal, false);
+    }
+
+    public Map<String, Object> submitAnalysis(Long mediaId, Long currentUserId, String goal, boolean force) {
         if (mediaId == null) {
             throw new IllegalArgumentException("mediaId is required");
         }
 
-        String userGoal = normalizeGoal(goal);
         MediaFile file = mediaFileMapper.selectById(mediaId);
         if (file == null) {
             throw new MediaNotFoundException("media not found");
         }
         verifyOwner(file, currentUserId);
 
+        AnalysisStatus expectedAnalysisStatus = file.getAnalysisStatus();
+        String expectedAnalysisRequestId = file.getAnalysisRequestId();
+        AnalysisStatus currentStatus = AnalysisStatus.effective(file.getAnalysisStatus(), file.getAiSummary());
+        if (!force && currentStatus == AnalysisStatus.SUCCESS) {
+            return result(file, "REUSED", "Existing analysis result reused");
+        }
+        if (currentStatus.isInProgress()) {
+            return result(file, "RUNNING", "Analysis task is already running");
+        }
+
+        String userGoal = normalizeGoal(goal);
         RRateLimiter rateLimiter = redissonClient.getRateLimiter(GLOBAL_LIMIT_KEY);
         rateLimiter.trySetRate(RateType.OVERALL, 10, 1, RateIntervalUnit.MINUTES);
         if (!rateLimiter.tryAcquire(1)) {
@@ -64,35 +84,115 @@ public class MediaAnalysisTaskService {
 
         String contentHash = resolveContentHash(file);
         String activeKey = AnalysisRedisKeys.active(currentUserId, contentHash);
-        Boolean accepted = redisTemplate.opsForValue()
-                .setIfAbsent(activeKey, String.valueOf(mediaId), 2, TimeUnit.HOURS);
+        String analysisRequestId = UUID.randomUUID().toString();
 
-        Map<String, Object> result = new HashMap<>();
-        result.put("mediaId", mediaId);
-        result.put("contentHash", contentHash);
+        if (!activeKeyService.tryAcquire(activeKey, analysisRequestId, Duration.ofHours(2))) {
+            return result(file, contentHash, "RUNNING", "Analysis task is already running");
+        }
 
-        if (!Boolean.TRUE.equals(accepted)) {
-            result.put("status", "RUNNING");
-            result.put("message", "Analysis task is already running");
-            return result;
+        int queuedRows;
+        try {
+            queuedRows = mediaFileMapper.queueAnalysis(
+                    mediaId,
+                    analysisRequestId,
+                    userGoal,
+                    expectedAnalysisStatus,
+                    expectedAnalysisRequestId);
+        } catch (RuntimeException e) {
+            deleteActiveKeySafely(activeKey, analysisRequestId);
+            throw new IllegalStateException("failed to persist queued analysis state", e);
+        }
+
+        if (queuedRows == 0) {
+            deleteActiveKeySafely(activeKey, analysisRequestId);
+            return resolveQueueConflict(mediaId, currentUserId);
         }
 
         try {
-            file.setAiSummary("[MQ] Analysis task queued");
-            mediaFileMapper.updateById(file);
             clearMediaListCache(file);
 
             AnalysisTaskMsg msg = new AnalysisTaskMsg(
-                    mediaId, currentUserId, "START_ANALYSIS", contentHash, userGoal);
+                    mediaId, currentUserId, "START_ANALYSIS", contentHash, userGoal, analysisRequestId);
             rocketMQTemplate.convertAndSend(ANALYSIS_TOPIC, msg);
 
-            result.put("status", "SUBMITTED");
-            result.put("message", "Analysis task submitted");
+            Map<String, Object> result = result(
+                    file, contentHash, "SUBMITTED", "Analysis task submitted");
+            result.put("analysisRequestId", analysisRequestId);
             return result;
         } catch (Exception e) {
-            redisTemplate.delete(activeKey);
+            deleteActiveKeySafely(activeKey, analysisRequestId);
+            try {
+                int failedRows = mediaFileMapper.markSubmitFailed(
+                        mediaId, analysisRequestId, conciseError(e), LocalDateTime.now());
+                if (failedRows == 0) {
+                    log.info("Analysis request {} advanced beyond QUEUED; submit failure did not overwrite it",
+                            analysisRequestId);
+                } else {
+                    clearMediaListCache(file);
+                }
+            } catch (RuntimeException statusError) {
+                log.error("Failed to mark queued analysis request {} as FAILED", analysisRequestId, statusError);
+            }
             throw new IllegalStateException("failed to submit analysis task", e);
         }
+    }
+
+    private Map<String, Object> resolveQueueConflict(Long mediaId, Long currentUserId) {
+        MediaFile latest = mediaFileMapper.selectById(mediaId);
+        if (latest == null) {
+            throw new MediaNotFoundException("media disappeared while submitting analysis");
+        }
+        verifyOwner(latest, currentUserId);
+
+        AnalysisStatus latestStatus = AnalysisStatus.effective(
+                latest.getAnalysisStatus(), latest.getAiSummary());
+        if (latestStatus == AnalysisStatus.SUCCESS) {
+            return result(latest, "REUSED", "Analysis completed while this request was being submitted");
+        }
+        if (latestStatus.isInProgress()) {
+            return result(latest, "RUNNING", "Another analysis request is already running");
+        }
+        throw new AnalysisStateConflictException(
+                "analysis state changed to " + latestStatus + " and cannot be safely queued");
+    }
+
+    private Map<String, Object> result(MediaFile file, String status, String message) {
+        return result(file, file.getContentHash(), status, message);
+    }
+
+    private Map<String, Object> result(MediaFile file, String contentHash, String status, String message) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("mediaId", file.getId());
+        if (contentHash != null) {
+            result.put("contentHash", contentHash);
+        }
+        if (file.getAnalysisRequestId() != null) {
+            result.put("analysisRequestId", file.getAnalysisRequestId());
+        }
+        result.put("status", status);
+        result.put("message", message);
+        return result;
+    }
+
+    private void deleteActiveKeySafely(String activeKey, String analysisRequestId) {
+        try {
+            activeKeyService.deleteIfOwned(activeKey, analysisRequestId);
+        } catch (RuntimeException cleanupError) {
+            log.error("Failed to delete owned analysis activeKey {}", activeKey, cleanupError);
+        }
+    }
+
+    static String conciseError(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null) {
+            current = current.getCause();
+        }
+        String message = current.getMessage();
+        if (message == null || message.isBlank()) {
+            message = current.getClass().getSimpleName();
+        }
+        message = message.replace('\r', ' ').replace('\n', ' ').trim();
+        return message.length() <= 1000 ? message : message.substring(0, 1000);
     }
 
     private String normalizeGoal(String goal) {
@@ -229,6 +329,12 @@ public class MediaAnalysisTaskService {
 
     public static class RateLimitExceededException extends RuntimeException {
         public RateLimitExceededException(String message) {
+            super(message);
+        }
+    }
+
+    public static class AnalysisStateConflictException extends RuntimeException {
+        public AnalysisStateConflictException(String message) {
             super(message);
         }
     }

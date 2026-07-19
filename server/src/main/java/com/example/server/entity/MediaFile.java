@@ -25,6 +25,13 @@ public class MediaFile {
     private String transcriptText;
     private String coverUrl;
 
+    private AnalysisStatus analysisStatus;
+    private String analysisRequestId;
+    private String analysisGoal;
+    private String analysisError;
+    private LocalDateTime analysisStartedAt;
+    private LocalDateTime analysisFinishedAt;
+
     //【修改点】删掉了 @TableField(fill = ...) 注解
     //上传时间由数据库自动记录，Java 不插手，防止报错
     private LocalDateTime uploadTime;

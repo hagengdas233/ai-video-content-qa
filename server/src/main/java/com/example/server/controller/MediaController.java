@@ -198,6 +198,7 @@ public class MediaController {
 
     @PostMapping("/analyze/{mediaId}")
     public ResponseEntity<?> analyze(@PathVariable Long mediaId,
+                                     @RequestParam(defaultValue = "false") boolean force,
                                      @RequestBody(required = false) Map<String, Object> request) {
         try {
             Long currentUserId = UserContext.requireUserId();
@@ -205,14 +206,19 @@ public class MediaController {
                     ? null
                     : String.valueOf(request.get("goal"));
 
-            Map<String, Object> result = mediaAnalysisTaskService.submitAnalysis(mediaId, currentUserId, goal);
-            return ResponseEntity.status(202).body(result);
+            Map<String, Object> result = mediaAnalysisTaskService
+                    .submitAnalysis(mediaId, currentUserId, goal, force);
+            return "REUSED".equals(result.get("status"))
+                    ? ResponseEntity.ok(result)
+                    : ResponseEntity.status(202).body(result);
         } catch (MediaAnalysisTaskService.MediaNotFoundException e) {
             return ResponseEntity.status(404).body(e.getMessage());
         } catch (MediaAnalysisTaskService.AccessDeniedException e) {
             return ResponseEntity.status(403).body(e.getMessage());
         } catch (MediaAnalysisTaskService.RateLimitExceededException e) {
             return ResponseEntity.status(429).body(e.getMessage());
+        } catch (MediaAnalysisTaskService.AnalysisStateConflictException e) {
+            return ResponseEntity.status(409).body(e.getMessage());
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {

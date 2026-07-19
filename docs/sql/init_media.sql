@@ -25,12 +25,23 @@ CREATE TABLE IF NOT EXISTS `media_files` (
   `content_hash` char(32) DEFAULT NULL COMMENT 'Server-computed lowercase MD5 of final video content',
   `ai_summary` longtext COLLATE utf8mb4_unicode_ci COMMENT 'AI summary in Markdown',
   `transcript_text` longtext COLLATE utf8mb4_unicode_ci COMMENT 'Transcript text',
+  `analysis_status` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'NOT_STARTED'
+    COMMENT 'NOT_STARTED, QUEUED, RUNNING, SUCCESS, FAILED',
+  `analysis_request_id` char(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Current analysis request UUID',
+  `analysis_goal` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Current analysis goal',
+  `analysis_error` varchar(1000) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Most recent analysis error',
+  `analysis_started_at` datetime DEFAULT NULL COMMENT 'Current analysis start time',
+  `analysis_finished_at` datetime DEFAULT NULL COMMENT 'Current analysis finish time',
   `cover_url` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Cover URL',
   `upload_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT 'Upload time',
   PRIMARY KEY (`id`),
   KEY `idx_media_files_user_id` (`user_id`),
   KEY `idx_media_files_upload_time` (`upload_time`),
   KEY `idx_media_files_status` (`status`),
+  KEY `idx_media_files_analysis_status` (`analysis_status`),
+  UNIQUE KEY `uk_media_files_analysis_request_id` (`analysis_request_id`),
+  CONSTRAINT `chk_media_files_analysis_status`
+    CHECK (`analysis_status` IN ('NOT_STARTED', 'QUEUED', 'RUNNING', 'SUCCESS', 'FAILED')),
   CONSTRAINT `fk_media_files_user_id`
     FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
     ON DELETE SET NULL
