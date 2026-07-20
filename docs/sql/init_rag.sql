@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
   create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
+  UNIQUE KEY uk_knowledge_documents_id_user_id (id, user_id),
   KEY idx_knowledge_documents_user_id (user_id),
   KEY idx_knowledge_documents_status (status),
   KEY idx_knowledge_documents_create_time (create_time)
@@ -30,7 +31,13 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
   embedding_dim INT DEFAULT NULL COMMENT '向量维度',
   create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (id),
+  UNIQUE KEY uk_knowledge_chunks_document_chunk_index (document_id, chunk_index),
+  KEY idx_knowledge_chunks_document_user (document_id, user_id),
   KEY idx_knowledge_chunks_document_id (document_id),
   KEY idx_knowledge_chunks_user_id (user_id),
-  KEY idx_knowledge_chunks_content_hash (content_hash)
+  KEY idx_knowledge_chunks_content_hash (content_hash),
+  CONSTRAINT fk_knowledge_chunks_document_user
+    FOREIGN KEY (document_id, user_id)
+    REFERENCES knowledge_documents (id, user_id)
+    ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库切块表';

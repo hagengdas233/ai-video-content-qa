@@ -1,11 +1,9 @@
 package com.example.server.service;
 
 import com.alibaba.fastjson2.JSON;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.server.entity.KnowledgeChunk;
 import com.example.server.mapper.KnowledgeChunkMapper;
 import com.example.server.utils.EmbeddingUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -15,14 +13,19 @@ import java.util.Map;
 @Service
 public class KnowledgeRetrievalService {
 
-    private static final int DEFAULT_TOP_K = 5;
+    public static final int DEFAULT_TOP_K = 5;
+    public static final int MIN_TOP_K = 1;
+    public static final int MAX_TOP_K = 20;
     public static final double MIN_SCORE = 0.45;
 
-    @Autowired
-    private KnowledgeChunkMapper knowledgeChunkMapper;
+    private final KnowledgeChunkMapper knowledgeChunkMapper;
+    private final EmbeddingUtils embeddingUtils;
 
-    @Autowired
-    private EmbeddingUtils embeddingUtils;
+    public KnowledgeRetrievalService(KnowledgeChunkMapper knowledgeChunkMapper,
+                                     EmbeddingUtils embeddingUtils) {
+        this.knowledgeChunkMapper = knowledgeChunkMapper;
+        this.embeddingUtils = embeddingUtils;
+    }
 
     public List<Map<String, Object>> search(Long userId, String question, Integer topK) {
         if (userId == null) {
@@ -32,7 +35,7 @@ public class KnowledgeRetrievalService {
             throw new IllegalArgumentException("question is required");
         }
 
-        int limit = topK == null || topK <= 0 ? DEFAULT_TOP_K : topK;
+        int limit = validateTopK(topK);
         List<KnowledgeChunk> chunks = listChunksWithEmbedding(userId);
         if (chunks.isEmpty()) {
             return List.of();
@@ -51,13 +54,17 @@ public class KnowledgeRetrievalService {
     }
 
     private List<KnowledgeChunk> listChunksWithEmbedding(Long userId) {
-        QueryWrapper<KnowledgeChunk> query = new QueryWrapper<>();
-        query.eq("user_id", userId)
-                .isNotNull("embedding")
-                .ne("embedding", "")
-                .orderByAsc("document_id")
-                .orderByAsc("chunk_index");
-        return knowledgeChunkMapper.selectList(query);
+        return knowledgeChunkMapper.selectRetrievableByUser(userId);
+    }
+
+    public static int validateTopK(Integer topK) {
+        if (topK == null) {
+            return DEFAULT_TOP_K;
+        }
+        if (topK < MIN_TOP_K || topK > MAX_TOP_K) {
+            throw new IllegalArgumentException("topK must be between 1 and 20");
+        }
+        return topK;
     }
 
     private Map<String, Object> toScoredResult(KnowledgeChunk chunk, List<Double> questionEmbedding) {

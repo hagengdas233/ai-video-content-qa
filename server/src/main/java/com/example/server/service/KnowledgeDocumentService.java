@@ -1,12 +1,10 @@
 package com.example.server.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.example.server.entity.KnowledgeChunk;
 import com.example.server.entity.KnowledgeDocument;
 import com.example.server.mapper.KnowledgeChunkMapper;
 import com.example.server.mapper.KnowledgeDocumentMapper;
 import com.example.server.utils.MinioUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,24 +17,33 @@ import java.util.List;
 @Service
 public class KnowledgeDocumentService {
 
-    @Autowired
-    private KnowledgeDocumentMapper knowledgeDocumentMapper;
+    private final KnowledgeDocumentMapper knowledgeDocumentMapper;
+    private final KnowledgeChunkMapper knowledgeChunkMapper;
+    private final KnowledgeChunkService knowledgeChunkService;
+    private final KnowledgePersistenceService knowledgePersistenceService;
+    private final MinioUtils minioUtils;
+    private final String minioBucket;
 
-    @Autowired
-    private KnowledgeChunkMapper knowledgeChunkMapper;
-
-    @Autowired
-    private KnowledgeChunkService knowledgeChunkService;
-
-    @Autowired
-    private MinioUtils minioUtils;
-
-    @Value("${minio.bucketName}")
-    private String minioBucket;
+    public KnowledgeDocumentService(KnowledgeDocumentMapper knowledgeDocumentMapper,
+                                    KnowledgeChunkMapper knowledgeChunkMapper,
+                                    KnowledgeChunkService knowledgeChunkService,
+                                    KnowledgePersistenceService knowledgePersistenceService,
+                                    MinioUtils minioUtils,
+                                    @Value("${minio.bucketName}") String minioBucket) {
+        this.knowledgeDocumentMapper = knowledgeDocumentMapper;
+        this.knowledgeChunkMapper = knowledgeChunkMapper;
+        this.knowledgeChunkService = knowledgeChunkService;
+        this.knowledgePersistenceService = knowledgePersistenceService;
+        this.minioUtils = minioUtils;
+        this.minioBucket = minioBucket;
+    }
 
     public KnowledgeDocument uploadAndProcess(MultipartFile file, Long userId) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("file is empty");
+        }
+        if (userId == null) {
+            throw new IllegalArgumentException("userId is required");
         }
 
         String originalFilename = file.getOriginalFilename();
@@ -60,28 +67,44 @@ public class KnowledgeDocumentService {
         try {
             fileUrl = minioUtils.uploadFile(file);
         } catch (Exception e) {
-            throw new IllegalStateException("MinIO upload failed: " + e.getMessage(), e);
+            throw new IllegalStateException("MinIO upload failed", e);
         }
 
         document.setMinioObjectKey(getObjectKey(fileUrl));
-        knowledgeDocumentMapper.insert(document);
+        int documentInserted = knowledgeDocumentMapper.insert(document);
+        if (documentInserted != 1 || document.getId() == null) {
+            throw new IllegalStateException("Knowledge document creation failed");
+        }
 
+        String failureSummary = KnowledgePersistenceService.ERROR_TEXT_EXTRACTION;
         try {
             String content = readText(file);
-            int chunkCount = knowledgeChunkService.splitAndSave(document.getId(), userId, content);
+            if (content.isBlank()) {
+                throw new IllegalArgumentException("document contains no valid text");
+            }
 
+            failureSummary = KnowledgePersistenceService.ERROR_CHUNK_PREPARATION;
+            var chunks = knowledgeChunkService.prepareChunks(document.getId(), userId, content);
+
+            failureSummary = KnowledgePersistenceService.ERROR_PERSISTENCE;
+            int chunkCount = knowledgePersistenceService.persistPreparedChunks(
+                    document.getId(), userId, chunks);
             document.setStatus("READY");
             document.setChunkCount(chunkCount);
             document.setErrorMessage(null);
             document.setUpdateTime(LocalDateTime.now());
-            knowledgeDocumentMapper.updateById(document);
         } catch (Exception e) {
-            document.setStatus("FAILED");
-            document.setErrorMessage(truncateError(e.getMessage()));
-            document.setUpdateTime(LocalDateTime.now());
-            if (document.getId() != null) {
-                knowledgeDocumentMapper.updateById(document);
+            try {
+                boolean failureRecorded = knowledgePersistenceService.markFailed(
+                        document.getId(), userId, failureSummary);
+                if (!failureRecorded) {
+                    e.addSuppressed(new KnowledgePersistenceService.ProcessingStateException(
+                            "Knowledge document was deleted before failure status could be recorded"));
+                }
+            } catch (Exception failureStateException) {
+                e.addSuppressed(failureStateException);
             }
+            throw new DocumentProcessingException("Document processing failed", e);
         }
 
         return document;
@@ -103,20 +126,28 @@ public class KnowledgeDocumentService {
             throw new IllegalArgumentException("userId is required");
         }
 
-        KnowledgeDocument document = knowledgeDocumentMapper.selectById(documentId);
-        if (document == null || !userId.equals(document.getUserId())) {
-            throw new IllegalArgumentException("知识库文档不存在或无权限删除");
+        KnowledgeDocument document = knowledgeDocumentMapper.selectOwnedById(documentId, userId);
+        if (document == null) {
+            throw new DocumentNotFoundException("Knowledge document not found");
+        }
+        if ("PROCESSING".equals(document.getStatus())) {
+            throw new DocumentConflictException("PROCESSING document cannot be deleted");
+        }
+        if (!"READY".equals(document.getStatus()) && !"FAILED".equals(document.getStatus())) {
+            throw new DocumentConflictException("Document status does not allow deletion");
         }
 
-        QueryWrapper<KnowledgeChunk> chunkQuery = new QueryWrapper<>();
-        chunkQuery.eq("document_id", documentId).eq("user_id", userId);
-        knowledgeChunkMapper.delete(chunkQuery);
+        int deletedChunks = knowledgeChunkMapper.deleteByDocumentAndUser(documentId, userId);
+        if (deletedChunks < 0) {
+            throw new IllegalStateException("Knowledge chunk cleanup returned an invalid count");
+        }
+        if (knowledgeChunkMapper.countByDocumentAndUser(documentId, userId) != 0) {
+            throw new IllegalStateException("Knowledge chunk cleanup was incomplete");
+        }
 
-        QueryWrapper<KnowledgeDocument> documentQuery = new QueryWrapper<>();
-        documentQuery.eq("id", documentId).eq("user_id", userId);
-        int deleted = knowledgeDocumentMapper.delete(documentQuery);
-        if (deleted <= 0) {
-            throw new IllegalStateException("知识库文档删除失败");
+        int deleted = knowledgeDocumentMapper.deleteOwnedReadyOrFailed(documentId, userId);
+        if (deleted != 1) {
+            throw new DocumentConflictException("Knowledge document deletion was rejected");
         }
 
         if (document.getMinioObjectKey() != null && !document.getMinioObjectKey().isBlank()) {
@@ -151,10 +182,21 @@ public class KnowledgeDocumentService {
         return fileUrl.substring(slashIndex + 1);
     }
 
-    private String truncateError(String message) {
-        if (message == null || message.isBlank()) {
-            return "unknown error";
+    public static class DocumentNotFoundException extends RuntimeException {
+        public DocumentNotFoundException(String message) {
+            super(message);
         }
-        return message.length() > 2048 ? message.substring(0, 2048) : message;
+    }
+
+    public static class DocumentConflictException extends RuntimeException {
+        public DocumentConflictException(String message) {
+            super(message);
+        }
+    }
+
+    public static class DocumentProcessingException extends RuntimeException {
+        public DocumentProcessingException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 }

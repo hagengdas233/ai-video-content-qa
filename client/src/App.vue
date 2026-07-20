@@ -621,11 +621,15 @@ const uploadRagDocument = async () => {
     if (!res.ok) throw new Error(text || '知识库文档上传失败')
 
     const data = JSON.parse(text)
+    if (data.status !== 'READY') {
+      throw new Error(`文档处理未完成：${data.status || 'UNKNOWN'}`)
+    }
     showRagMsg(`上传成功：documentId=${data.documentId}, chunks=${data.chunkCount}`)
     ragFile.value = null
     await fetchRagDocuments()
   } catch (error) {
     console.error(error)
+    await fetchRagDocuments()
     showRagMsg('上传失败：' + error.message, true)
   } finally {
     ragUploading.value = false
