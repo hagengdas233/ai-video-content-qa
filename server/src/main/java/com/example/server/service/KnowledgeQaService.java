@@ -1,7 +1,6 @@
 package com.example.server.service;
 
 import com.example.server.utils.DeepSeekUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -13,11 +12,14 @@ public class KnowledgeQaService {
 
     private static final String NO_ANSWER = "知识库中没有找到相关信息";
 
-    @Autowired
-    private KnowledgeRetrievalService knowledgeRetrievalService;
+    private final KnowledgeRetrievalService knowledgeRetrievalService;
+    private final DeepSeekUtils deepSeekUtils;
 
-    @Autowired
-    private DeepSeekUtils deepSeekUtils;
+    public KnowledgeQaService(KnowledgeRetrievalService knowledgeRetrievalService,
+                              DeepSeekUtils deepSeekUtils) {
+        this.knowledgeRetrievalService = knowledgeRetrievalService;
+        this.deepSeekUtils = deepSeekUtils;
+    }
 
     public Map<String, Object> ask(Long userId, String question, Integer topK) {
         if (question == null || question.isBlank()) {
