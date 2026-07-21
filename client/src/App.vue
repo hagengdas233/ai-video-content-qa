@@ -372,7 +372,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { marked } from 'marked'
 
 // --- 变量定义 ---
@@ -386,6 +386,7 @@ const activeWorkspace = ref('video')
 const sidebar = ref({
   visible: false,
   type: 'ai',
+  mediaId: null,
   title: '',
   content: '',
   loading: false,
@@ -400,6 +401,10 @@ const authMessage = ref('')
 const authError = ref(false)
 const authForm = ref({ username: '', password: '', nickname: '' })
 const pollingTimers = ref({})
+let pollingSequence = 0
+let lifecycleGeneration = 0
+let sessionGeneration = 0
+let componentActive = true
 const AUTH_TOKEN_STORAGE_KEY = 'authToken'
 const authToken = ref(localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '')
 const analysisSubmitting = ref({})
@@ -413,6 +418,17 @@ const ragListLoading = ref(false)
 const ragAsking = ref(false)
 const ragMessage = ref('')
 const ragError = ref(false)
+
+const captureGeneration = () => ({
+  lifecycle: lifecycleGeneration,
+  session: sessionGeneration
+})
+
+const isGenerationCurrent = (generation) => (
+  componentActive
+  && generation.lifecycle === lifecycleGeneration
+  && generation.session === sessionGeneration
+)
 
 const authenticatedFetch = (url, options = {}) => {
   const headers = new Headers(options.headers || {})
@@ -718,7 +734,10 @@ const formatScore = (score) => {
   return Number.isFinite(value) ? value.toFixed(4) : '0.0000'
 }
 
-const fetchList = async () => {
+const fetchList = async (canApply = () => true) => {
+  const requestGeneration = captureGeneration()
+  const canApplyResult = () => isGenerationCurrent(requestGeneration) && canApply()
+
   try {
     let url = 'http://localhost:9090/media/list'
     if (currentUser.value) {
@@ -727,14 +746,20 @@ const fetchList = async () => {
       url += `?_t=${timestamp}`
 
       const res = await authenticatedFetch(url)
+      if (!res.ok) throw new Error(`Failed to fetch media list (HTTP ${res.status})`)
       const data = await res.json()
+      if (!Array.isArray(data)) throw new Error('Invalid media list response')
+      if (!canApplyResult()) return false
       // 倒序排列，新的在前面
       list.value = data.reverse()
     } else {
+      if (!canApplyResult()) return false
       list.value = []
     }
+    return true
   } catch (error) {
     console.error(error)
+    return false
   }
 }
 
@@ -819,9 +844,34 @@ const setAnalysisSubmitting = (id, submitting) => {
   analysisSubmitting.value = next
 }
 
+const stopPolling = (id, token = null) => {
+  const polling = pollingTimers.value[id]
+  if (!polling || (token !== null && polling.token !== token)) return false
+
+  if (polling.pollTimer) clearTimeout(polling.pollTimer)
+  if (polling.timeoutTimer) clearTimeout(polling.timeoutTimer)
+  delete pollingTimers.value[id]
+  return true
+}
+
+const stopAllPolling = () => {
+  Object.keys(pollingTimers.value).forEach(id => stopPolling(id))
+}
+
+const setAuthenticatedSession = (user, token) => {
+  sessionGeneration += 1
+  stopAllPolling()
+  currentUser.value = user
+  authToken.value = token
+  analysisSubmitting.value = {}
+}
+
 const clearAuthenticatedSession = () => {
+  sessionGeneration += 1
+  stopAllPolling()
   currentUser.value = null
   authToken.value = ''
+  analysisSubmitting.value = {}
   localStorage.removeItem('user')
   localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
   list.value = []
@@ -910,10 +960,13 @@ const aiAnalyze = async (id, force = false) => {
   const item = list.value.find(i => i.id === id)
   const currentStatus = effectiveAnalysisStatus(item)
   const existingSummary = displayableAiSummary(item)
+  const isCurrentAnalysisSidebar = () => (
+    sidebar.value.visible && sidebar.value.type === 'ai' && sidebar.value.mediaId === id
+  )
 
   // 已有成功结果时，普通操作只展示结果；重新分析必须显式 force=true。
   if (!force && existingSummary && currentStatus === 'SUCCESS') {
-    openSidebar('ai', 'AI 智能总结')
+    openSidebar('ai', 'AI 智能总结', id)
     sidebar.value.content = existingSummary
     sidebar.value.loading = false
     setAnalysisNotice('SUCCESS')
@@ -922,7 +975,7 @@ const aiAnalyze = async (id, force = false) => {
 
   // 持久化状态是 QUEUED/RUNNING 时不重复提交；有旧结果则继续展示旧结果。
   if (isAnalysisRunning(item) || (pollingTimers.value[id] && pollingTimers.value[id].type === 'ai')) {
-    openSidebar('ai', 'AI 智能总结')
+    openSidebar('ai', 'AI 智能总结', id)
     sidebar.value.content = existingSummary
     sidebar.value.loading = !sidebar.value.content
     setAnalysisNotice(currentStatus === 'QUEUED' ? 'QUEUED' : 'RUNNING', Boolean(existingSummary))
@@ -932,7 +985,7 @@ const aiAnalyze = async (id, force = false) => {
 
   // 失败后仍保留的旧结果默认只展示；重新执行需点击“重新分析”。
   if (!force && existingSummary) {
-    openSidebar('ai', 'AI 智能总结')
+    openSidebar('ai', 'AI 智能总结', id)
     sidebar.value.content = existingSummary
     sidebar.value.loading = false
     setAnalysisNotice(currentStatus, false, item.analysisError)
@@ -950,13 +1003,14 @@ const aiAnalyze = async (id, force = false) => {
 
   // 3. 准备提交请求，打开侧边栏loading
   setAnalysisSubmitting(id, true)
-  openSidebar('ai', 'AI 智能总结')
+  openSidebar('ai', 'AI 智能总结', id)
   sidebar.value.content = existingSummary
   sidebar.value.loading = !sidebar.value.content
   sidebar.value.statusText = force && sidebar.value.content
       ? '正在提交重新分析任务，当前展示上一次结果。'
       : '正在提交正式分析任务。'
   sidebar.value.statusTone = 'running'
+  const requestGeneration = captureGeneration()
 
   try {
     const res = await authenticatedFetch(`http://localhost:9090/media/analyze/${id}?force=${force}`, {
@@ -967,68 +1021,129 @@ const aiAnalyze = async (id, force = false) => {
       body: JSON.stringify({})
     })
     const { data, message: responseMessage } = await parseResponseBody(res)
+    if (!isGenerationCurrent(requestGeneration)) return
 
     if (res.status === 401) {
+      const ownsSidebar = isCurrentAnalysisSidebar()
       clearAuthenticatedSession()
-      sidebar.value.visible = false
-      sidebar.value.loading = false
+      if (ownsSidebar) {
+        sidebar.value.visible = false
+        sidebar.value.loading = false
+      }
       showMsg('⚠️ 登录已失效，请重新登录', true)
       openAuthModal()
       return
     }
 
     if (res.status === 403) {
-      sidebar.value.loading = false
-      sidebar.value.content = responseMessage || '无权分析该视频'
+      if (isCurrentAnalysisSidebar()) {
+        sidebar.value.loading = false
+        sidebar.value.content = responseMessage || '无权分析该视频'
+      }
       showMsg('⚠️ 无权分析该视频', true)
       return
     }
 
     if (!res.ok) {
-      sidebar.value.loading = false
-      sidebar.value.content = responseMessage || `分析任务提交失败（HTTP ${res.status}）`
-      showMsg(`❌ ${sidebar.value.content}`, true)
+      const errorMessage = responseMessage || `分析任务提交失败（HTTP ${res.status}）`
+      if (isCurrentAnalysisSidebar()) {
+        sidebar.value.loading = false
+        sidebar.value.content = errorMessage
+      }
+      showMsg(`❌ ${errorMessage}`, true)
       return
     }
 
     const status = data?.status
     if (status === 'REUSED') {
-      await fetchList()
+      const refreshed = await fetchList()
+      if (!isGenerationCurrent(requestGeneration)) return
+      if (!refreshed) {
+        if (isCurrentAnalysisSidebar()) {
+          sidebar.value.loading = false
+          sidebar.value.statusText = '分析结果刷新失败，请稍后刷新查看。'
+          sidebar.value.statusTone = 'error'
+        }
+        showMsg('⚠️ 分析结果刷新失败，请稍后刷新查看', true)
+        return
+      }
+
       const reusedItem = list.value.find(i => i.id === id)
-      sidebar.value.content = displayableAiSummary(reusedItem) || existingSummary
-      sidebar.value.loading = false
-      setAnalysisNotice('SUCCESS')
+      if (isCurrentAnalysisSidebar()) {
+        sidebar.value.content = displayableAiSummary(reusedItem) || existingSummary
+        sidebar.value.loading = false
+        setAnalysisNotice('SUCCESS')
+      }
       showMsg('已复用现有分析结果')
       return
     } else if (status === 'RUNNING') {
       const duplicateMessage = responseMessage || 'Analysis task is already running'
       showMsg(`⚠️ ${duplicateMessage}`, true)
-      setAnalysisNotice('RUNNING', Boolean(sidebar.value.content))
+      if (isCurrentAnalysisSidebar()) {
+        setAnalysisNotice('RUNNING', Boolean(sidebar.value.content))
+      }
     } else {
       showMsg('✅ 任务已提交')
-      setAnalysisNotice('QUEUED', force && Boolean(sidebar.value.content))
+      if (isCurrentAnalysisSidebar()) {
+        setAnalysisNotice('QUEUED', force && Boolean(sidebar.value.content))
+      }
     }
     startPolling(id, 'ai')
 
   } catch (e) {
-    sidebar.value.content = "Error: " + (e?.message || e)
-    sidebar.value.loading = false
+    if (!isGenerationCurrent(requestGeneration)) return
+    if (isCurrentAnalysisSidebar()) {
+      sidebar.value.content = "Error: " + (e?.message || e)
+      sidebar.value.loading = false
+    }
     showMsg('❌ 分析请求失败，请检查网络或后端服务', true)
   } finally {
-    setAnalysisSubmitting(id, false)
+    if (isGenerationCurrent(requestGeneration)) setAnalysisSubmitting(id, false)
   }
 }
 
 const startPolling = (id, type) => {
-  // 清理旧定时器
-  if (pollingTimers.value[id]) clearInterval(pollingTimers.value[id].timer)
+  // 同一任务重新轮询时，成对清理旧的轮询等待与总超时定时器。
+  stopPolling(id)
+  const token = ++pollingSequence
+  const polling = {
+    pollTimer: null,
+    timeoutTimer: null,
+    type,
+    token
+  }
+  pollingTimers.value[id] = polling
   console.log(`[轮询] 开始监听任务 ID: ${id}, 类型: ${type}`)
 
-  const timer = setInterval(async () => {
+  const isCurrentPolling = () => pollingTimers.value[id]?.token === token
+  const isCurrentAiSidebar = () => (
+    sidebar.value.visible && sidebar.value.type === 'ai' && sidebar.value.mediaId === id
+  )
+
+  const scheduleNextPoll = () => {
+    if (!isCurrentPolling()) return
+    polling.pollTimer = setTimeout(runPoll, 3000)
+  }
+
+  const runPoll = async () => {
+    if (!isCurrentPolling()) return
+    polling.pollTimer = null
+
     // 1. 强制刷新列表 (带时间戳防止缓存)
-    await fetchList()
+    const refreshed = await fetchList(isCurrentPolling)
+    // 旧请求返回时不得更新或删除同一任务的新轮询状态。
+    if (!isCurrentPolling()) return
+    // 单次刷新失败时不读取旧状态，只等待下一次轮询。
+    if (!refreshed) {
+      scheduleNextPoll()
+      return
+    }
+
     const item = list.value.find(i => i.id === id)
-    if (!item) return
+    if (!item) {
+      scheduleNextPoll()
+      return
+    }
 
     let isFinished = false
     let result = ''
@@ -1040,7 +1155,7 @@ const startPolling = (id, type) => {
         isFinished = true
         result = currentSummary
       } else if (status === 'QUEUED' || status === 'RUNNING') {
-        if (sidebar.value.visible && sidebar.value.type === 'ai') {
+        if (isCurrentAiSidebar()) {
           if (currentSummary) {
             sidebar.value.content = currentSummary
             sidebar.value.loading = false
@@ -1061,7 +1176,10 @@ const startPolling = (id, type) => {
     // 2. 结算
     if (isFinished) {
       // 如果侧边栏正开着，更新内容
-      if (sidebar.value.visible && sidebar.value.title.includes(type === 'ai' ? 'AI' : '文字')) {
+      const isCurrentSidebar = type === 'ai'
+          ? isCurrentAiSidebar()
+          : sidebar.value.visible && sidebar.value.title.includes('文字')
+      if (isCurrentSidebar) {
         if (result) sidebar.value.content = result
         sidebar.value.loading = false
         if (type === 'ai') {
@@ -1076,25 +1194,37 @@ const startPolling = (id, type) => {
         showMsg("✅ 任务完成")
       }
 
-      clearInterval(timer)
-      delete pollingTimers.value[id]
+      stopPolling(id, token)
+      return
     }
-  }, 3000) // 3秒轮询一次
 
-  pollingTimers.value[id] = { timer, type }
+    // 本次请求完成后再等待 3 秒，避免同一任务的请求重叠。
+    scheduleNextPoll()
+  }
 
   // 5分钟强制兜底停止
-  setTimeout(() => {
-    if (pollingTimers.value[id]) {
-      clearInterval(pollingTimers.value[id].timer)
-      delete pollingTimers.value[id]
+  polling.timeoutTimer = setTimeout(() => {
+    if (!stopPolling(id, token)) return
+
+    if (type === 'ai') {
+      const timeoutMessage = '任务仍可能在后台处理中，请稍后刷新查看'
+      if (isCurrentAiSidebar()) {
+        sidebar.value.loading = false
+        sidebar.value.statusText = timeoutMessage
+        sidebar.value.statusTone = 'running'
+      } else {
+        showMsg(`⚠️ ${timeoutMessage}`)
+      }
     }
   }, 300000)
+
+  scheduleNextPoll()
 }
 
-const openSidebar = (type, title) => {
+const openSidebar = (type, title, mediaId = null) => {
   sidebar.value.visible = true
   sidebar.value.type = type
+  sidebar.value.mediaId = mediaId
   sidebar.value.title = title
   sidebar.value.loading = true
   sidebar.value.content = ''
@@ -1132,8 +1262,7 @@ const handleAuth = async () => {
     if (data.code === 200) {
       if (authMode.value === 'login') {
         if (!data.token) throw new Error('登录响应缺少 token')
-        currentUser.value = data.userInfo
-        authToken.value = data.token
+        setAuthenticatedSession(data.userInfo, data.token)
         localStorage.setItem('user', JSON.stringify(data.userInfo))
         localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token)
         closeAuthModal()
@@ -1166,8 +1295,7 @@ onMounted(() => {
   const savedToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
   if (savedUser && savedToken) {
     try {
-      currentUser.value = JSON.parse(savedUser)
-      authToken.value = savedToken
+      setAuthenticatedSession(JSON.parse(savedUser), savedToken)
     } catch(e) {
       clearAuthenticatedSession()
     }
@@ -1178,6 +1306,11 @@ onMounted(() => {
     fetchList()
     fetchRagDocuments()
   }
+})
+onUnmounted(() => {
+  componentActive = false
+  lifecycleGeneration += 1
+  stopAllPolling()
 })
 </script>
 
