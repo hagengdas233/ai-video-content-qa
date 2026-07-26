@@ -4,12 +4,15 @@ import com.example.server.dto.AgentState;
 import com.example.server.dto.AnalysisResult;
 import com.example.server.dto.VideoContext;
 import com.example.server.utils.DeepSeekUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AgentLoopService {
 
+    private static final Logger log = LoggerFactory.getLogger(AgentLoopService.class);
     private static final int MAX_ROUNDS = 2;
 
     @Autowired
@@ -24,13 +27,23 @@ public class AgentLoopService {
         AgentState state = new AgentState(relevantContext.userGoal(), plan, null, null, 0);
 
         for (int round = 1; round <= MAX_ROUNDS; round++) {
-            AnalysisResult result = deepSeekUtils.execute(relevantContext, plan, state.critique());
+            AnalysisResult result;
+            try {
+                result = deepSeekUtils.execute(relevantContext, plan, state.critique());
+            } catch (RuntimeException e) {
+                if (state.result() == null) {
+                    throw e;
+                }
+                log.warn("Executor correction failed in round {}; falling back to the previous round result, "
+                        + "failureType={}", round, e.getClass().getSimpleName());
+                return state;
+            }
             AgentState.CriticResult critique;
             try {
                 critique = deepSeekUtils.critique(relevantContext, plan, result);
             } catch (Exception e) {
-                System.err.println("Critic failed, fallback to executor result: " + e.getMessage());
-                e.printStackTrace();
+                log.warn("Critic failed in round {}; falling back to the current Executor result, failureType={}",
+                        round, e.getClass().getSimpleName());
                 return new AgentState(relevantContext.userGoal(), plan, result, null, round);
             }
             state = new AgentState(relevantContext.userGoal(), plan, result, critique, round);
