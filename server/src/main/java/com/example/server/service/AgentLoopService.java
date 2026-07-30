@@ -2,6 +2,7 @@ package com.example.server.service;
 
 import com.example.server.dto.AgentState;
 import com.example.server.dto.AnalysisResult;
+import com.example.server.dto.ContextSelectionResult;
 import com.example.server.dto.VideoContext;
 import com.example.server.utils.DeepSeekUtils;
 import org.slf4j.Logger;
@@ -9,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Locale;
 
 @Service
@@ -24,7 +26,18 @@ public class AgentLoopService {
     private LongVideoContextService longVideoContextService;
 
     public AgentState run(VideoContext context) {
-        VideoContext relevantContext = longVideoContextService.selectRelevant(context);
+        ContextSelectionResult selection = longVideoContextService.selectRelevant(context);
+        if (!selection.isMatched()) {
+            AnalysisResult result = new AnalysisResult(
+                    "目标分析结果",
+                    List.of("视频内容不足以支持该分析目标"),
+                    List.of(),
+                    List.of("可调整分析目标后重新提交")
+            );
+            return new AgentState(context.userGoal(), null, result, null, 0);
+        }
+
+        VideoContext relevantContext = selection.context();
         AgentState.AgentPlan plan = deepSeekUtils.plan(relevantContext);
         AgentState state = new AgentState(relevantContext.userGoal(), plan, null, null, 0);
 
