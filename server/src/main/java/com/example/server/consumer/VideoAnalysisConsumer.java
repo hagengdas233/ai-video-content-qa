@@ -2,6 +2,7 @@ package com.example.server.consumer;
 
 import com.example.server.dto.AnalysisTaskMsg;
 import com.example.server.dto.AiAnalysisOutput;
+import com.example.server.entity.AnalysisMode;
 import com.example.server.entity.AnalysisStatus;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
@@ -120,7 +121,10 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
             }
             clearMediaListCache(userId);
 
-            AiAnalysisOutput output = aiService.analyze(mediaId, msg.getUserGoal());
+            AnalysisMode analysisMode = msg.getAnalysisMode() == null
+                    ? AnalysisMode.FULL
+                    : msg.getAnalysisMode();
+            AiAnalysisOutput output = aiService.analyze(mediaId, analysisMode, msg.getUserGoal());
             if (mediaFileMapper.markAnalysisSuccess(
                     mediaId,
                     analysisRequestId,

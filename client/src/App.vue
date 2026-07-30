@@ -184,6 +184,37 @@
                     </div>
                   </div>
 
+                  <div v-if="analysisDrafts[item.id]" class="analysis-config">
+                    <div class="analysis-mode-switch" role="group" aria-label="视频分析模式">
+                      <button
+                          type="button"
+                          :class="{ active: analysisDrafts[item.id].mode === 'FULL' }"
+                          :disabled="isAnalysisSubmitting(item.id) || isAnalysisRunning(item)"
+                          @click="setAnalysisMode(item.id, 'FULL')"
+                      >
+                        全文总结
+                      </button>
+                      <button
+                          type="button"
+                          :class="{ active: analysisDrafts[item.id].mode === 'GOAL' }"
+                          :disabled="isAnalysisSubmitting(item.id) || isAnalysisRunning(item)"
+                          @click="setAnalysisMode(item.id, 'GOAL')"
+                      >
+                        目标分析
+                      </button>
+                    </div>
+                    <div v-if="analysisDrafts[item.id].mode === 'GOAL'" class="analysis-goal-field">
+                      <textarea
+                          v-model="analysisDrafts[item.id].goal"
+                          maxlength="500"
+                          required
+                          :disabled="isAnalysisSubmitting(item.id) || isAnalysisRunning(item)"
+                          placeholder="请输入本次分析目标，例如：找出方案中的风险和待办事项"
+                      ></textarea>
+                      <span>{{ analysisDrafts[item.id].goal.length }}/500</span>
+                    </div>
+                  </div>
+
                   <div class="action-dock">
                     <button class="dock-item" @click="downloadAudio(item)">
                       <span class="item-icon">
@@ -212,7 +243,9 @@
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
                       </span>
                       <div class="label-group">
-                        <span class="item-label">{{ isAnalysisSubmitting(item.id) ? '提交中...' : 'AI 总结' }}</span>
+                        <span class="item-label">
+                          {{ isAnalysisSubmitting(item.id) ? '提交中...' : analysisModeLabel(analysisDrafts[item.id]?.mode) }}
+                        </span>
                       </div>
                       <div class="shimmer"></div>
                     </button>
@@ -313,6 +346,12 @@
               <div v-if="sidebar.statusText" class="analysis-notice" :class="sidebar.statusTone">
                 {{ sidebar.statusText }}
               </div>
+              <div v-if="sidebar.type === 'ai' && sidebar.analysisMode" class="analysis-result-meta">
+                <span class="analysis-result-mode">{{ analysisModeLabel(sidebar.analysisMode) }}</span>
+                <p v-if="sidebar.analysisMode === 'GOAL'">
+                  <strong>分析目标：</strong>{{ sidebar.analysisGoal }}
+                </p>
+              </div>
               <div v-if="sidebar.loading" class="loading-state"><div class="quantum-loader small"></div><p>数据流处理中...</p></div>
               <div v-else>
               <div v-if="sidebar.type === 'ai' || sidebar.type === 'rag'" class="markdown-content" v-html="renderedMarkdown"></div>
@@ -391,7 +430,9 @@ const sidebar = ref({
   content: '',
   loading: false,
   statusText: '',
-  statusTone: ''
+  statusTone: '',
+  analysisMode: '',
+  analysisGoal: ''
 })
 const currentUser = ref(null)
 const showAuthModal = ref(false)
@@ -408,6 +449,7 @@ let componentActive = true
 const AUTH_TOKEN_STORAGE_KEY = 'authToken'
 const authToken = ref(localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '')
 const analysisSubmitting = ref({})
+const analysisDrafts = ref({})
 const ragFile = ref(null)
 const ragDocuments = ref([])
 const ragQuestion = ref('')
@@ -751,7 +793,9 @@ const fetchList = async (canApply = () => true) => {
       if (!Array.isArray(data)) throw new Error('Invalid media list response')
       if (!canApplyResult()) return false
       // 倒序排列，新的在前面
-      list.value = data.reverse()
+      const items = data.reverse()
+      syncAnalysisDrafts(items)
+      list.value = items
     } else {
       if (!canApplyResult()) return false
       list.value = []
@@ -864,6 +908,7 @@ const setAuthenticatedSession = (user, token) => {
   currentUser.value = user
   authToken.value = token
   analysisSubmitting.value = {}
+  analysisDrafts.value = {}
 }
 
 const clearAuthenticatedSession = () => {
@@ -872,6 +917,7 @@ const clearAuthenticatedSession = () => {
   currentUser.value = null
   authToken.value = ''
   analysisSubmitting.value = {}
+  analysisDrafts.value = {}
   localStorage.removeItem('user')
   localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
   list.value = []
@@ -910,6 +956,46 @@ const isLegacyAnalysisFailure = (summary) => (
 
 const displayableAiSummary = (item) => (
   isLegacyAnalysisPlaceholder(item?.aiSummary) ? '' : (item?.aiSummary || '')
+)
+
+const analysisModeLabel = (mode) => mode === 'GOAL' ? '目标分析' : '全文总结'
+
+const persistedAnalysisMode = (item) => item?.analysisMode === 'GOAL' ? 'GOAL' : 'FULL'
+
+const persistedAnalysisGoal = (item) => (
+  persistedAnalysisMode(item) === 'GOAL' ? (item?.analysisGoal || '').trim() : ''
+)
+
+const syncAnalysisDrafts = (items) => {
+  const next = {}
+  items.forEach(item => {
+    const existing = analysisDrafts.value[item.id]
+    next[item.id] = existing || {
+      mode: persistedAnalysisMode(item),
+      goal: persistedAnalysisGoal(item)
+    }
+  })
+  analysisDrafts.value = next
+}
+
+const setAnalysisMode = (id, mode) => {
+  const draft = analysisDrafts.value[id]
+  if (!draft) return
+  draft.mode = mode === 'GOAL' ? 'GOAL' : 'FULL'
+}
+
+const setSidebarAnalysis = (mode, goal = '') => {
+  sidebar.value.analysisMode = mode === 'GOAL' ? 'GOAL' : 'FULL'
+  sidebar.value.analysisGoal = sidebar.value.analysisMode === 'GOAL' ? goal.trim() : ''
+}
+
+const setSidebarAnalysisFromItem = (item) => {
+  setSidebarAnalysis(persistedAnalysisMode(item), persistedAnalysisGoal(item))
+}
+
+const isSameAnalysisSelection = (item, mode, goal) => (
+  persistedAnalysisMode(item) === mode
+  && (mode === 'FULL' || persistedAnalysisGoal(item) === goal)
 )
 
 const effectiveAnalysisStatus = (item) => {
@@ -951,22 +1037,38 @@ const setAnalysisNotice = (status, reanalysis = false, error = '') => {
 }
 
 const confirmReanalysis = async (item) => {
-  if (!item || !confirm(`确认重新分析 "${item.filename}" 吗？\n\n重新分析会产生新的 ASR/OCR/大模型调用，完成前仍可查看旧结果。`)) return
+  const draft = item ? analysisDrafts.value[item.id] : null
+  const modeLabel = analysisModeLabel(draft?.mode)
+  if (!item || !confirm(`确认以“${modeLabel}”重新分析 "${item.filename}" 吗？\n\n重新分析会产生新的 ASR/OCR/大模型调用，完成前仍可查看旧结果。`)) return
   await aiAnalyze(item.id, true)
 }
 
 // 正式 AI 分析入口：登录 Token -> 归属校验 -> 限流/防重 -> RocketMQ。
 const aiAnalyze = async (id, force = false) => {
   const item = list.value.find(i => i.id === id)
+  const draft = analysisDrafts.value[id] || { mode: 'FULL', goal: '' }
+  const requestedMode = draft.mode === 'GOAL' ? 'GOAL' : 'FULL'
+  const requestedGoal = requestedMode === 'GOAL' ? draft.goal.trim() : ''
   const currentStatus = effectiveAnalysisStatus(item)
   const existingSummary = displayableAiSummary(item)
+  const sameSelection = isSameAnalysisSelection(item, requestedMode, requestedGoal)
   const isCurrentAnalysisSidebar = () => (
     sidebar.value.visible && sidebar.value.type === 'ai' && sidebar.value.mediaId === id
   )
 
-  // 已有成功结果时，普通操作只展示结果；重新分析必须显式 force=true。
-  if (!force && existingSummary && currentStatus === 'SUCCESS') {
-    openSidebar('ai', 'AI 智能总结', id)
+  if (requestedMode === 'GOAL' && !requestedGoal) {
+    showMsg('⚠️ 目标分析必须填写分析目标', true)
+    return
+  }
+  if (requestedGoal.length > 500) {
+    showMsg('⚠️ 分析目标不能超过 500 字符', true)
+    return
+  }
+
+  // 只有模式和规范化目标都一致时，才在前端直接展示已有成功结果。
+  if (!force && existingSummary && currentStatus === 'SUCCESS' && sameSelection) {
+    openSidebar('ai', analysisModeLabel(requestedMode), id)
+    setSidebarAnalysisFromItem(item)
     sidebar.value.content = existingSummary
     sidebar.value.loading = false
     setAnalysisNotice('SUCCESS')
@@ -975,7 +1077,8 @@ const aiAnalyze = async (id, force = false) => {
 
   // 持久化状态是 QUEUED/RUNNING 时不重复提交；有旧结果则继续展示旧结果。
   if (isAnalysisRunning(item) || (pollingTimers.value[id] && pollingTimers.value[id].type === 'ai')) {
-    openSidebar('ai', 'AI 智能总结', id)
+    openSidebar('ai', analysisModeLabel(persistedAnalysisMode(item)), id)
+    setSidebarAnalysisFromItem(item)
     sidebar.value.content = existingSummary
     sidebar.value.loading = !sidebar.value.content
     setAnalysisNotice(currentStatus === 'QUEUED' ? 'QUEUED' : 'RUNNING', Boolean(existingSummary))
@@ -983,9 +1086,10 @@ const aiAnalyze = async (id, force = false) => {
     return
   }
 
-  // 失败后仍保留的旧结果默认只展示；重新执行需点击“重新分析”。
-  if (!force && existingSummary) {
-    openSidebar('ai', 'AI 智能总结', id)
+  // 失败后仅在选择仍相同时展示旧结果；改变模式或目标会直接创建新任务。
+  if (!force && existingSummary && sameSelection) {
+    openSidebar('ai', analysisModeLabel(requestedMode), id)
+    setSidebarAnalysisFromItem(item)
     sidebar.value.content = existingSummary
     sidebar.value.loading = false
     setAnalysisNotice(currentStatus, false, item.analysisError)
@@ -1003,7 +1107,8 @@ const aiAnalyze = async (id, force = false) => {
 
   // 3. 准备提交请求，打开侧边栏loading
   setAnalysisSubmitting(id, true)
-  openSidebar('ai', 'AI 智能总结', id)
+  openSidebar('ai', analysisModeLabel(requestedMode), id)
+  setSidebarAnalysis(requestedMode, requestedGoal)
   sidebar.value.content = existingSummary
   sidebar.value.loading = !sidebar.value.content
   sidebar.value.statusText = force && sidebar.value.content
@@ -1018,7 +1123,10 @@ const aiAnalyze = async (id, force = false) => {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({})
+      body: JSON.stringify({
+        mode: requestedMode,
+        goal: requestedMode === 'GOAL' ? requestedGoal : null
+      })
     })
     const { data, message: responseMessage } = await parseResponseBody(res)
     if (!isGenerationCurrent(requestGeneration)) return
@@ -1070,6 +1178,7 @@ const aiAnalyze = async (id, force = false) => {
 
       const reusedItem = list.value.find(i => i.id === id)
       if (isCurrentAnalysisSidebar()) {
+        setSidebarAnalysisFromItem(reusedItem)
         sidebar.value.content = displayableAiSummary(reusedItem) || existingSummary
         sidebar.value.loading = false
         setAnalysisNotice('SUCCESS')
@@ -1156,6 +1265,7 @@ const startPolling = (id, type) => {
         result = currentSummary
       } else if (status === 'QUEUED' || status === 'RUNNING') {
         if (isCurrentAiSidebar()) {
+          setSidebarAnalysisFromItem(item)
           if (currentSummary) {
             sidebar.value.content = currentSummary
             sidebar.value.loading = false
@@ -1183,6 +1293,7 @@ const startPolling = (id, type) => {
         if (result) sidebar.value.content = result
         sidebar.value.loading = false
         if (type === 'ai') {
+          setSidebarAnalysisFromItem(item)
           const status = effectiveAnalysisStatus(item)
           setAnalysisNotice(status, false, item.analysisError)
         }
@@ -1230,6 +1341,8 @@ const openSidebar = (type, title, mediaId = null) => {
   sidebar.value.content = ''
   sidebar.value.statusText = ''
   sidebar.value.statusTone = ''
+  sidebar.value.analysisMode = ''
+  sidebar.value.analysisGoal = ''
 }
 const closeSidebar = () => { sidebar.value.visible = false }
 
@@ -1482,6 +1595,23 @@ html, body, #app {
 .analysis-indicator.success { color: var(--accent-success); border-color: var(--accent-success); }
 .analysis-indicator.failed { color: #ff8b96; border-color: #ff4757; }
 
+.analysis-config { padding: 12px; border-bottom: 1px solid var(--border-tech); background: rgba(8, 15, 30, 0.78); }
+.analysis-mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.analysis-mode-switch button {
+  border: 1px solid var(--border-tech); border-radius: 6px; padding: 8px;
+  background: transparent; color: var(--text-sub); cursor: pointer; font-weight: 700;
+}
+.analysis-mode-switch button.active { color: var(--text-inverse); border-color: var(--accent-lime); background: var(--accent-lime); }
+.analysis-mode-switch button:disabled { opacity: 0.45; cursor: not-allowed; }
+.analysis-goal-field { margin-top: 10px; }
+.analysis-goal-field textarea {
+  width: 100%; min-height: 82px; resize: vertical; border: 1px solid var(--border-tech);
+  border-radius: 6px; padding: 9px; background: #000; color: var(--text-main);
+  font-family: 'Noto Sans SC', monospace; line-height: 1.5; outline: none;
+}
+.analysis-goal-field textarea:focus { border-color: var(--accent-lime); box-shadow: 0 0 10px rgba(34, 211, 238, 0.18); }
+.analysis-goal-field span { display: block; margin-top: 4px; text-align: right; color: var(--text-sub); font-size: 0.72rem; }
+
 .action-dock { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 12px; background: rgba(8, 15, 30, 0.64); }
 .dock-item { position: relative; min-width: 0; border: 1px solid var(--border-tech); background: var(--bg-card); border-radius: 8px; padding: 12px 8px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; transition: all 0.3s; color: var(--text-sub); font-family: monospace; overflow: hidden; white-space: nowrap; }
 .dock-item svg { flex: 0 0 auto; }
@@ -1548,6 +1678,16 @@ html, body, #app {
 .close-btn { background: none; border: none; color: var(--text-sub); padding: 5px; cursor: pointer; transition: color 0.3s; }
 .close-btn:hover { color: var(--accent-lime); }
 .sidebar-body { flex: 1; overflow-y: auto; padding: 30px; }
+.analysis-result-meta {
+  margin-bottom: 14px; padding: 12px; border: 1px solid var(--border-tech);
+  border-radius: 8px; background: rgba(34, 211, 238, 0.06);
+}
+.analysis-result-mode {
+  display: inline-block; color: var(--accent-lime); font-size: 0.78rem;
+  font-weight: 800; letter-spacing: 0.08em;
+}
+.analysis-result-meta p { margin: 8px 0 0; color: var(--text-sub); line-height: 1.6; overflow-wrap: anywhere; }
+.analysis-result-meta strong { color: var(--text-main); }
 .loading-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-sub); gap: 20px; }
 .markdown-content, .text-content { line-height: 1.8; color: var(--text-main); font-size: 0.95rem; }
 .text-content pre { white-space: pre-wrap; font-family: monospace; background: #000; padding: 15px; border-radius: 8px; border: 1px solid var(--border-tech); color: #ccc; }

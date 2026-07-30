@@ -1,5 +1,7 @@
 package com.example.server.dto;
 
+import com.example.server.entity.AnalysisMode;
+
 import java.util.List;
 
 /**
@@ -7,6 +9,7 @@ import java.util.List;
  */
 public record VideoContext(
         String source,
+        AnalysisMode analysisMode,
         String userGoal,
         List<VideoSegment> segments
 ) {
@@ -14,9 +17,17 @@ public record VideoContext(
             long startMs,
             long endMs,
             String transcript,
+            String contentSource,
             List<String> ocrTexts,
             List<String> evidenceFrames
     ) {
+        public VideoSegment(long startMs,
+                            long endMs,
+                            String transcript,
+                            List<String> ocrTexts,
+                            List<String> evidenceFrames) {
+            this(startMs, endMs, transcript, "ASR", ocrTexts, evidenceFrames);
+        }
     }
 
     public String transcriptText() {

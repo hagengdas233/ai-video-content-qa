@@ -1,6 +1,7 @@
 package com.example.server.service;
 
 import com.example.server.dto.AnalysisTaskMsg;
+import com.example.server.entity.AnalysisMode;
 import com.example.server.entity.AnalysisStatus;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
@@ -21,6 +22,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -28,7 +30,6 @@ public class MediaAnalysisTaskService {
 
     private static final Logger log = LoggerFactory.getLogger(MediaAnalysisTaskService.class);
 
-    private static final String DEFAULT_GOAL = "Understand the core video content and generate a structured analysis report";
     private static final String ANALYSIS_TOPIC = "video-analysis-topic";
     private static final String GLOBAL_LIMIT_KEY = "limit:ai:global";
 
@@ -51,14 +52,20 @@ public class MediaAnalysisTaskService {
     private AnalysisActiveKeyService activeKeyService;
 
     public Map<String, Object> submitAnalysis(Long mediaId, Long currentUserId, String goal) {
-        return submitAnalysis(mediaId, currentUserId, goal, false);
+        return submitAnalysis(mediaId, currentUserId, null, goal, false);
     }
 
     public Map<String, Object> submitAnalysis(Long mediaId, Long currentUserId, String goal, boolean force) {
+        return submitAnalysis(mediaId, currentUserId, null, goal, force);
+    }
+
+    public Map<String, Object> submitAnalysis(Long mediaId, Long currentUserId,
+                                              String mode, String goal, boolean force) {
         if (mediaId == null) {
             throw new IllegalArgumentException("mediaId is required");
         }
 
+        NormalizedAnalysis normalized = normalizeAnalysis(mode, goal);
         MediaFile file = mediaFileMapper.selectById(mediaId);
         if (file == null) {
             throw new MediaNotFoundException("media not found");
@@ -68,14 +75,13 @@ public class MediaAnalysisTaskService {
         AnalysisStatus expectedAnalysisStatus = file.getAnalysisStatus();
         String expectedAnalysisRequestId = file.getAnalysisRequestId();
         AnalysisStatus currentStatus = AnalysisStatus.effective(file.getAnalysisStatus(), file.getAiSummary());
-        if (!force && currentStatus == AnalysisStatus.SUCCESS) {
-            return result(file, "REUSED", "Existing analysis result reused");
+        if (!force && currentStatus == AnalysisStatus.SUCCESS && matches(file, normalized)) {
+            return result(file, normalized, "REUSED", "Existing analysis result reused");
         }
         if (currentStatus.isInProgress()) {
             return result(file, "RUNNING", "Analysis task is already running");
         }
 
-        String userGoal = normalizeGoal(goal);
         RRateLimiter rateLimiter = redissonClient.getRateLimiter(GLOBAL_LIMIT_KEY);
         rateLimiter.trySetRate(RateType.OVERALL, 10, 1, RateIntervalUnit.MINUTES);
         if (!rateLimiter.tryAcquire(1)) {
@@ -87,7 +93,12 @@ public class MediaAnalysisTaskService {
         String analysisRequestId = UUID.randomUUID().toString();
 
         if (!activeKeyService.tryAcquire(activeKey, analysisRequestId, Duration.ofHours(2))) {
-            return result(file, contentHash, "RUNNING", "Analysis task is already running");
+            Map<String, Object> running = result(file, contentHash, normalized,
+                    "RUNNING", "Analysis task is already running");
+            // This request did not acquire ownership and did not create a requestId.
+            // Do not expose the media row's previous requestId as if it belonged to this submission.
+            running.remove("analysisRequestId");
+            return running;
         }
 
         int queuedRows;
@@ -95,7 +106,8 @@ public class MediaAnalysisTaskService {
             queuedRows = mediaFileMapper.queueAnalysis(
                     mediaId,
                     analysisRequestId,
-                    userGoal,
+                    normalized.mode(),
+                    normalized.goal(),
                     expectedAnalysisStatus,
                     expectedAnalysisRequestId);
         } catch (RuntimeException e) {
@@ -105,18 +117,19 @@ public class MediaAnalysisTaskService {
 
         if (queuedRows == 0) {
             deleteActiveKeySafely(activeKey, analysisRequestId);
-            return resolveQueueConflict(mediaId, currentUserId);
+            return resolveQueueConflict(mediaId, currentUserId, normalized);
         }
 
         try {
             clearMediaListCache(file);
 
             AnalysisTaskMsg msg = new AnalysisTaskMsg(
-                    mediaId, currentUserId, "START_ANALYSIS", contentHash, userGoal, analysisRequestId);
+                    mediaId, currentUserId, "START_ANALYSIS", contentHash,
+                    normalized.mode(), normalized.goal(), analysisRequestId);
             rocketMQTemplate.convertAndSend(ANALYSIS_TOPIC, msg);
 
             Map<String, Object> result = result(
-                    file, contentHash, "SUBMITTED", "Analysis task submitted");
+                    file, contentHash, normalized, "SUBMITTED", "Analysis task submitted");
             result.put("analysisRequestId", analysisRequestId);
             return result;
         } catch (Exception e) {
@@ -137,7 +150,8 @@ public class MediaAnalysisTaskService {
         }
     }
 
-    private Map<String, Object> resolveQueueConflict(Long mediaId, Long currentUserId) {
+    private Map<String, Object> resolveQueueConflict(Long mediaId, Long currentUserId,
+                                                     NormalizedAnalysis normalized) {
         MediaFile latest = mediaFileMapper.selectById(mediaId);
         if (latest == null) {
             throw new MediaNotFoundException("media disappeared while submitting analysis");
@@ -146,8 +160,9 @@ public class MediaAnalysisTaskService {
 
         AnalysisStatus latestStatus = AnalysisStatus.effective(
                 latest.getAnalysisStatus(), latest.getAiSummary());
-        if (latestStatus == AnalysisStatus.SUCCESS) {
-            return result(latest, "REUSED", "Analysis completed while this request was being submitted");
+        if (latestStatus == AnalysisStatus.SUCCESS && matches(latest, normalized)) {
+            return result(latest, normalized, "REUSED",
+                    "Analysis completed while this request was being submitted");
         }
         if (latestStatus.isInProgress()) {
             return result(latest, "RUNNING", "Another analysis request is already running");
@@ -157,10 +172,16 @@ public class MediaAnalysisTaskService {
     }
 
     private Map<String, Object> result(MediaFile file, String status, String message) {
-        return result(file, file.getContentHash(), status, message);
+        return result(file, file.getContentHash(), normalizedFrom(file), status, message);
     }
 
-    private Map<String, Object> result(MediaFile file, String contentHash, String status, String message) {
+    private Map<String, Object> result(MediaFile file, NormalizedAnalysis normalized,
+                                       String status, String message) {
+        return result(file, file.getContentHash(), normalized, status, message);
+    }
+
+    private Map<String, Object> result(MediaFile file, String contentHash,
+                                       NormalizedAnalysis normalized, String status, String message) {
         Map<String, Object> result = new HashMap<>();
         result.put("mediaId", file.getId());
         if (contentHash != null) {
@@ -169,6 +190,8 @@ public class MediaAnalysisTaskService {
         if (file.getAnalysisRequestId() != null) {
             result.put("analysisRequestId", file.getAnalysisRequestId());
         }
+        result.put("analysisMode", normalized.mode());
+        result.put("analysisGoal", normalized.goal());
         result.put("status", status);
         result.put("message", message);
         return result;
@@ -195,12 +218,35 @@ public class MediaAnalysisTaskService {
         return message.length() <= 1000 ? message : message.substring(0, 1000);
     }
 
-    private String normalizeGoal(String goal) {
-        String userGoal = goal == null || goal.isBlank() ? DEFAULT_GOAL : goal.trim();
+    private NormalizedAnalysis normalizeAnalysis(String mode, String goal) {
+        AnalysisMode analysisMode = AnalysisMode.fromNullable(mode);
+        if (analysisMode == AnalysisMode.FULL) {
+            return new NormalizedAnalysis(analysisMode, AnalysisMode.FULL_INTERNAL_GOAL);
+        }
+
+        String userGoal = goal == null ? "" : goal.trim();
+        if (userGoal.isEmpty()) {
+            throw new IllegalArgumentException("goal is required when mode is GOAL");
+        }
         if (userGoal.length() > 500) {
             throw new IllegalArgumentException("goal must not exceed 500 characters");
         }
-        return userGoal;
+        return new NormalizedAnalysis(analysisMode, userGoal);
+    }
+
+    private NormalizedAnalysis normalizedFrom(MediaFile file) {
+        AnalysisMode mode = file.getAnalysisMode() == null ? AnalysisMode.FULL : file.getAnalysisMode();
+        if (mode == AnalysisMode.FULL) {
+            return new NormalizedAnalysis(mode, AnalysisMode.FULL_INTERNAL_GOAL);
+        }
+        String goal = file.getAnalysisGoal() == null ? null : file.getAnalysisGoal().trim();
+        return new NormalizedAnalysis(mode, goal);
+    }
+
+    private boolean matches(MediaFile file, NormalizedAnalysis requested) {
+        NormalizedAnalysis persisted = normalizedFrom(file);
+        return persisted.mode() == requested.mode()
+                && Objects.equals(persisted.goal(), requested.goal());
     }
 
     private void verifyOwner(MediaFile file, Long currentUserId) {
@@ -313,6 +359,9 @@ public class MediaAnalysisTaskService {
     private void clearMediaListCache(MediaFile file) {
         String userIdKey = file.getUserId() == null ? "anon" : String.valueOf(file.getUserId());
         redisTemplate.delete("media:list:user:" + userIdKey);
+    }
+
+    private record NormalizedAnalysis(AnalysisMode mode, String goal) {
     }
 
     public static class MediaNotFoundException extends RuntimeException {

@@ -1,6 +1,7 @@
 package com.example.server.service;
 
 import com.example.server.dto.VideoContext;
+import com.example.server.entity.AnalysisMode;
 import com.example.server.utils.AliyunAsrUtils;
 import com.example.server.utils.OcrUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,7 +33,7 @@ public class VideoContextService {
     @Autowired
     private OcrUtils ocrUtils;
 
-    public VideoContext build(String videoPath, String userGoal) {
+    public VideoContext build(String videoPath, AnalysisMode analysisMode, String userGoal) {
         Path workDir = Path.of(System.getProperty("java.io.tmpdir"), "video-context-" + UUID.randomUUID());
         try {
             Files.createDirectories(workDir);
@@ -44,7 +45,7 @@ public class VideoContextService {
                 System.err.println("Key frame extraction failed, continuing with ASR only: " + e.getMessage());
                 frames = List.of();
             }
-            return new VideoContext(videoPath, userGoal, merge(transcripts, frames));
+            return new VideoContext(videoPath, analysisMode, userGoal, merge(transcripts, frames));
         } catch (Exception e) {
             throw new IllegalStateException("VideoContext 构建失败", e);
         } finally {
@@ -124,6 +125,7 @@ public class VideoContextService {
                     transcript.startMs(),
                     transcript.endMs(),
                     transcript.text(),
+                    "ASR",
                     ocrTexts,
                     evidenceFrames
             ));

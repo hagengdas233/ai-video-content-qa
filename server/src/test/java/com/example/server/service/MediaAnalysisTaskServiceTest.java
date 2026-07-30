@@ -1,6 +1,7 @@
 package com.example.server.service;
 
 import com.example.server.dto.AnalysisTaskMsg;
+import com.example.server.entity.AnalysisMode;
 import com.example.server.entity.AnalysisStatus;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
@@ -48,6 +49,8 @@ class MediaAnalysisTaskServiceTest {
 
     private static final String HASH = "0123456789abcdef0123456789abcdef";
     private static final String OTHER_HASH = "abcdef0123456789abcdef0123456789";
+    private static final String FULL_GOAL =
+            "Summarize the complete video in chronological order and generate a structured analysis report";
 
     @Mock
     private MediaFileMapper mediaFileMapper;
@@ -92,7 +95,7 @@ class MediaAnalysisTaskServiceTest {
         assertEquals("REUSED", result.get("status"));
         assertEquals(file.getAnalysisRequestId(), result.get("analysisRequestId"));
         verifyNoInteractions(activeKeyService, rocketMQTemplate, redissonClient);
-        verify(mediaFileMapper, never()).queueAnalysis(any(), any(), any(), any(), any());
+        verify(mediaFileMapper, never()).queueAnalysis(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -101,7 +104,7 @@ class MediaAnalysisTaskServiceTest {
         when(mediaFileMapper.selectById(2L)).thenReturn(file);
         stubAcceptedSubmission(file);
 
-        Map<String, Object> result = service.submitAnalysis(2L, 7L, "new goal", true);
+        Map<String, Object> result = service.submitAnalysis(2L, 7L, "GOAL", "new goal", true);
 
         assertEquals("SUBMITTED", result.get("status"));
         String requestId = (String) result.get("analysisRequestId");
@@ -111,12 +114,139 @@ class MediaAnalysisTaskServiceTest {
         verify(activeKeyService).tryAcquire(
                 AnalysisRedisKeys.active(7L, HASH), requestId, Duration.ofHours(2));
         verify(mediaFileMapper).queueAnalysis(
-                2L, requestId, "new goal", AnalysisStatus.SUCCESS, null);
+                2L, requestId, AnalysisMode.GOAL, "new goal", AnalysisStatus.SUCCESS, null);
 
         ArgumentCaptor<AnalysisTaskMsg> message = ArgumentCaptor.forClass(AnalysisTaskMsg.class);
         verify(rocketMQTemplate).convertAndSend(eq("video-analysis-topic"), message.capture());
         assertEquals(requestId, message.getValue().getAnalysisRequestId());
+        assertEquals(AnalysisMode.GOAL, message.getValue().getAnalysisMode());
+        assertEquals("new goal", message.getValue().getUserGoal());
         assertEquals("## old result", file.getAiSummary());
+    }
+
+    @Test
+    void legacyRequestWithoutModeDefaultsToFull() {
+        MediaFile file = media(7L, 7L, HASH, AnalysisStatus.FAILED, null);
+        file.setAnalysisMode(null);
+        file.setAnalysisGoal(null);
+        when(mediaFileMapper.selectById(7L)).thenReturn(file);
+        stubAcceptedSubmission(file);
+
+        Map<String, Object> result = service.submitAnalysis(7L, 7L, null, null, false);
+
+        assertEquals("SUBMITTED", result.get("status"));
+        String requestId = (String) result.get("analysisRequestId");
+        verify(mediaFileMapper).queueAnalysis(
+                7L, requestId, AnalysisMode.FULL, FULL_GOAL, AnalysisStatus.FAILED, null);
+        ArgumentCaptor<AnalysisTaskMsg> message = ArgumentCaptor.forClass(AnalysisTaskMsg.class);
+        verify(rocketMQTemplate).convertAndSend(eq("video-analysis-topic"), message.capture());
+        assertEquals(AnalysisMode.FULL, message.getValue().getAnalysisMode());
+        assertEquals(FULL_GOAL, message.getValue().getUserGoal());
+    }
+
+    @Test
+    void goalModeRejectsBlankGoalBeforeReadingMedia() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.submitAnalysis(8L, 7L, "GOAL", "   ", false));
+
+        assertEquals("goal is required when mode is GOAL", error.getMessage());
+        verifyNoInteractions(mediaFileMapper, activeKeyService, rocketMQTemplate, redissonClient);
+    }
+
+    @Test
+    void sameGoalModeAndNormalizedGoalAreReused() {
+        MediaFile file = media(9L, 7L, HASH, AnalysisStatus.SUCCESS, "## existing result");
+        file.setAnalysisMode(AnalysisMode.GOAL);
+        file.setAnalysisGoal("find launch risks");
+        file.setAnalysisRequestId(UUID.randomUUID().toString());
+        when(mediaFileMapper.selectById(9L)).thenReturn(file);
+
+        Map<String, Object> result = service.submitAnalysis(
+                9L, 7L, "goal", "  find launch risks  ", false);
+
+        assertEquals("REUSED", result.get("status"));
+        assertEquals(AnalysisMode.GOAL, result.get("analysisMode"));
+        assertEquals("find launch risks", result.get("analysisGoal"));
+        verifyNoInteractions(activeKeyService, rocketMQTemplate, redissonClient);
+    }
+
+    @Test
+    void historicalFullGoalIsIgnoredForCanonicalFullReuse() {
+        MediaFile file = media(16L, 7L, HASH, AnalysisStatus.SUCCESS, "## historical result");
+        file.setAnalysisMode(AnalysisMode.FULL);
+        file.setAnalysisGoal("legacy goal retained by migration");
+        file.setAnalysisRequestId("77777777-7777-4777-8777-777777777777");
+        when(mediaFileMapper.selectById(16L)).thenReturn(file);
+
+        Map<String, Object> result = service.submitAnalysis(16L, 7L, null, null, false);
+
+        assertEquals("REUSED", result.get("status"));
+        assertEquals(AnalysisMode.FULL, result.get("analysisMode"));
+        assertEquals(FULL_GOAL, result.get("analysisGoal"));
+        verifyNoInteractions(activeKeyService, rocketMQTemplate, redissonClient);
+    }
+
+    @Test
+    void changingModeCreatesNewRequestWithoutForce() {
+        MediaFile file = media(14L, 7L, HASH, AnalysisStatus.SUCCESS, "## full result");
+        when(mediaFileMapper.selectById(14L)).thenReturn(file);
+        stubAcceptedSubmission(file);
+
+        Map<String, Object> result = service.submitAnalysis(
+                14L, 7L, "GOAL", "find security issues", false);
+
+        assertEquals("SUBMITTED", result.get("status"));
+        String requestId = (String) result.get("analysisRequestId");
+        assertNotNull(requestId);
+        assertNotEquals(file.getAnalysisRequestId(), requestId);
+        verify(mediaFileMapper).queueAnalysis(
+                14L, requestId, AnalysisMode.GOAL, "find security issues",
+                AnalysisStatus.SUCCESS, null);
+    }
+
+    @Test
+    void changingGoalCreatesNewRequestWithoutForce() {
+        MediaFile file = media(15L, 7L, HASH, AnalysisStatus.SUCCESS, "## old goal result");
+        file.setAnalysisMode(AnalysisMode.GOAL);
+        file.setAnalysisGoal("old goal");
+        file.setAnalysisRequestId("66666666-6666-4666-8666-666666666666");
+        when(mediaFileMapper.selectById(15L)).thenReturn(file);
+        stubAcceptedSubmission(file);
+
+        Map<String, Object> result = service.submitAnalysis(
+                15L, 7L, "GOAL", "new goal", false);
+
+        assertEquals("SUBMITTED", result.get("status"));
+        String requestId = (String) result.get("analysisRequestId");
+        assertNotEquals(file.getAnalysisRequestId(), requestId);
+        verify(mediaFileMapper).queueAnalysis(
+                15L, requestId, AnalysisMode.GOAL, "new goal",
+                AnalysisStatus.SUCCESS, file.getAnalysisRequestId());
+    }
+
+    @Test
+    void changedModeWithOccupiedActiveKeyReturnsRunningWithoutFakeRequestId() {
+        MediaFile file = media(17L, 7L, HASH, AnalysisStatus.SUCCESS, "## old result");
+        file.setAnalysisRequestId("88888888-8888-4888-8888-888888888888");
+        when(mediaFileMapper.selectById(17L)).thenReturn(file);
+        stubRedisOperations();
+        when(redissonClient.getRateLimiter("limit:ai:global")).thenReturn(rateLimiter);
+        when(rateLimiter.tryAcquire(1)).thenReturn(true);
+        when(valueOperations.get(AnalysisRedisKeys.contentHash(17L))).thenReturn(HASH);
+        when(activeKeyService.tryAcquire(
+                eq(AnalysisRedisKeys.active(7L, HASH)),
+                anyString(),
+                eq(Duration.ofHours(2)))).thenReturn(false);
+
+        Map<String, Object> result = service.submitAnalysis(
+                17L, 7L, "GOAL", "new target", false);
+
+        assertEquals("RUNNING", result.get("status"));
+        assertEquals(AnalysisMode.GOAL, result.get("analysisMode"));
+        assertEquals("new target", result.get("analysisGoal"));
+        org.junit.jupiter.api.Assertions.assertFalse(result.containsKey("analysisRequestId"));
+        verify(mediaFileMapper, never()).queueAnalysis(any(), any(), any(), any(), any(), any());
+        verifyNoInteractions(rocketMQTemplate);
     }
 
     @ParameterizedTest
@@ -130,7 +260,7 @@ class MediaAnalysisTaskServiceTest {
 
         assertEquals("RUNNING", result.get("status"));
         verifyNoInteractions(activeKeyService, rocketMQTemplate, redissonClient);
-        verify(mediaFileMapper, never()).queueAnalysis(any(), any(), any(), any(), any());
+        verify(mediaFileMapper, never()).queueAnalysis(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -152,7 +282,8 @@ class MediaAnalysisTaskServiceTest {
 
         ArgumentCaptor<String> requestId = ArgumentCaptor.forClass(String.class);
         verify(mediaFileMapper).queueAnalysis(
-                eq(4L), requestId.capture(), anyString(), eq(AnalysisStatus.SUCCESS), eq(null));
+                eq(4L), requestId.capture(), eq(AnalysisMode.FULL), eq(FULL_GOAL),
+                eq(AnalysisStatus.SUCCESS), eq(null));
         verify(activeKeyService).deleteIfOwned(
                 AnalysisRedisKeys.active(7L, HASH), requestId.getValue());
         verify(mediaFileMapper).markSubmitFailed(
@@ -170,7 +301,8 @@ class MediaAnalysisTaskServiceTest {
         when(mediaFileMapper.selectById(20L)).thenReturn(original, latest);
         stubSubmissionPrerequisites(original);
         when(mediaFileMapper.queueAnalysis(
-                eq(20L), anyString(), anyString(), eq(AnalysisStatus.FAILED), eq(null)))
+                eq(20L), anyString(), eq(AnalysisMode.FULL), eq(FULL_GOAL),
+                eq(AnalysisStatus.FAILED), eq(null)))
                 .thenReturn(0);
 
         assertThrows(MediaAnalysisTaskService.AnalysisStateConflictException.class,
@@ -178,7 +310,8 @@ class MediaAnalysisTaskServiceTest {
 
         ArgumentCaptor<String> requestId = ArgumentCaptor.forClass(String.class);
         verify(mediaFileMapper).queueAnalysis(
-                eq(20L), requestId.capture(), anyString(), eq(AnalysisStatus.FAILED), eq(null));
+                eq(20L), requestId.capture(), eq(AnalysisMode.FULL), eq(FULL_GOAL),
+                eq(AnalysisStatus.FAILED), eq(null));
         verify(activeKeyService).deleteIfOwned(
                 AnalysisRedisKeys.active(7L, HASH), requestId.getValue());
         verifyNoInteractions(rocketMQTemplate);
@@ -192,7 +325,8 @@ class MediaAnalysisTaskServiceTest {
         when(mediaFileMapper.selectById(21L)).thenReturn(original, latest);
         stubSubmissionPrerequisites(original);
         when(mediaFileMapper.queueAnalysis(
-                eq(21L), anyString(), anyString(), eq(AnalysisStatus.FAILED), eq(null)))
+                eq(21L), anyString(), eq(AnalysisMode.FULL), eq(FULL_GOAL),
+                eq(AnalysisStatus.FAILED), eq(null)))
                 .thenReturn(0);
 
         Map<String, Object> result = service.submitAnalysis(21L, 7L, null, false);
@@ -213,7 +347,8 @@ class MediaAnalysisTaskServiceTest {
         when(mediaFileMapper.selectById(22L)).thenReturn(original, latest);
         stubSubmissionPrerequisites(original);
         when(mediaFileMapper.queueAnalysis(
-                eq(22L), anyString(), anyString(), eq(AnalysisStatus.FAILED), eq(null)))
+                eq(22L), anyString(), eq(AnalysisMode.FULL), eq(FULL_GOAL),
+                eq(AnalysisStatus.FAILED), eq(null)))
                 .thenReturn(0);
 
         Map<String, Object> result = service.submitAnalysis(22L, 7L, null, false);
@@ -332,6 +467,7 @@ class MediaAnalysisTaskServiceTest {
         when(mediaFileMapper.queueAnalysis(
                 eq(file.getId()),
                 anyString(),
+                any(AnalysisMode.class),
                 anyString(),
                 eq(file.getAnalysisStatus()),
                 eq(file.getAnalysisRequestId()))).thenReturn(1);
@@ -359,6 +495,8 @@ class MediaAnalysisTaskServiceTest {
         file.setUserId(userId);
         file.setContentHash(contentHash);
         file.setAnalysisStatus(status);
+        file.setAnalysisMode(AnalysisMode.FULL);
+        file.setAnalysisGoal(FULL_GOAL);
         file.setAiSummary(aiSummary);
         file.setFilePath("unused-in-unit-test");
         return file;

@@ -2,6 +2,7 @@ package com.example.server.consumer;
 
 import com.example.server.dto.AiAnalysisOutput;
 import com.example.server.dto.AnalysisTaskMsg;
+import com.example.server.entity.AnalysisMode;
 import com.example.server.entity.AnalysisStatus;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
@@ -73,7 +74,7 @@ class VideoAnalysisConsumerTest {
         when(mediaFileMapper.selectById(1L)).thenReturn(file);
         when(mediaFileMapper.markAnalysisRunning(eq(1L), eq(REQUEST_ID), any(LocalDateTime.class)))
                 .thenReturn(1);
-        when(aiService.analyze(1L, "goal"))
+        when(aiService.analyze(1L, AnalysisMode.GOAL, "goal"))
                 .thenReturn(new AiAnalysisOutput("new transcript", "## new result"));
         when(mediaFileMapper.markAnalysisSuccess(
                 eq(1L), eq(REQUEST_ID), eq("new transcript"), eq("## new result"), any(LocalDateTime.class)))
@@ -82,7 +83,7 @@ class VideoAnalysisConsumerTest {
         consumer.onMessage(message(REQUEST_ID));
 
         InOrder completionOrder = inOrder(aiService, mediaFileMapper);
-        completionOrder.verify(aiService).analyze(1L, "goal");
+        completionOrder.verify(aiService).analyze(1L, AnalysisMode.GOAL, "goal");
         completionOrder.verify(mediaFileMapper).markAnalysisSuccess(
                 eq(1L), eq(REQUEST_ID), eq("new transcript"), eq("## new result"), any(LocalDateTime.class));
         verify(activeKeyService).deleteIfOwned(AnalysisRedisKeys.active(7L, HASH), REQUEST_ID);
@@ -98,7 +99,7 @@ class VideoAnalysisConsumerTest {
 
         consumer.onMessage(message(REQUEST_ID));
 
-        verify(aiService, never()).analyze(any(), any());
+        verify(aiService, never()).analyze(any(), any(), any());
         verify(mediaFileMapper, never()).markAnalysisRunning(any(), any(), any());
         verify(mediaFileMapper, never()).markAnalysisSuccess(any(), any(), any(), any(), any());
         verify(activeKeyService).deleteIfOwned(AnalysisRedisKeys.active(7L, HASH), REQUEST_ID);
@@ -112,7 +113,7 @@ class VideoAnalysisConsumerTest {
 
         consumer.onMessage(message(REQUEST_ID));
 
-        verify(aiService, never()).analyze(any(), any());
+        verify(aiService, never()).analyze(any(), any(), any());
         verify(mediaFileMapper, never()).markAnalysisRunning(any(), any(), any());
         verify(mediaFileMapper, never()).markAnalysisSuccess(any(), any(), any(), any(), any());
         verify(mediaFileMapper, never()).markExecutionFailed(any(), any(), any(), any());
@@ -138,7 +139,7 @@ class VideoAnalysisConsumerTest {
         when(mediaFileMapper.markAnalysisRunning(eq(1L), eq(REQUEST_ID), any(LocalDateTime.class)))
                 .thenReturn(1);
         doThrow(new RuntimeException("provider unavailable"))
-                .when(aiService).analyze(1L, "goal");
+                .when(aiService).analyze(1L, AnalysisMode.GOAL, "goal");
 
         consumer.onMessage(message(REQUEST_ID));
 
@@ -202,6 +203,7 @@ class VideoAnalysisConsumerTest {
 
     private AnalysisTaskMsg message(Long mediaId, Long userId, String contentHash, String requestId) {
         return new AnalysisTaskMsg(
-                mediaId, userId, "START_ANALYSIS", contentHash, "goal", requestId);
+                mediaId, userId, "START_ANALYSIS", contentHash,
+                AnalysisMode.GOAL, "goal", requestId);
     }
 }
