@@ -9,6 +9,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.Locale;
+
 @Service
 public class AgentLoopService {
 
@@ -30,6 +32,7 @@ public class AgentLoopService {
             AnalysisResult result;
             try {
                 result = deepSeekUtils.execute(relevantContext, plan, state.critique());
+                result = validateEvidence(relevantContext, result);
             } catch (RuntimeException e) {
                 if (state.result() == null) {
                     throw e;
@@ -53,5 +56,43 @@ public class AgentLoopService {
             }
         }
         return state;
+    }
+
+    AnalysisResult validateEvidence(VideoContext context, AnalysisResult result) {
+        if (result == null || result.evidence() == null || result.evidence().isEmpty()) {
+            return result;
+        }
+        var validEvidence = result.evidence().stream()
+                .filter(evidence -> isSupportedEvidence(context, evidence))
+                .toList();
+        if (validEvidence.size() == result.evidence().size()) {
+            return result;
+        }
+        return new AnalysisResult(
+                result.title(), result.conclusions(), validEvidence, result.suggestions());
+    }
+
+    private boolean isSupportedEvidence(VideoContext context, AnalysisResult.Evidence evidence) {
+        if (evidence == null || evidence.source() == null) {
+            return false;
+        }
+        String source = evidence.source().trim().toUpperCase(Locale.ROOT);
+        return context.segments().stream().anyMatch(segment -> switch (source) {
+            case "CHUNK_SUMMARY" ->
+                    "CHUNK_SUMMARY".equals(segment.contentSource())
+                            && evidence.timestampMs() == segment.startMs();
+            case "ASR" ->
+                    "ASR".equals(segment.contentSource())
+                            && segment.transcript() != null
+                            && !segment.transcript().isBlank()
+                            && evidence.timestampMs() >= segment.startMs()
+                            && evidence.timestampMs() < segment.endMs();
+            case "OCR" ->
+                    segment.ocrTexts() != null
+                            && !segment.ocrTexts().isEmpty()
+                            && evidence.timestampMs() >= segment.startMs()
+                            && evidence.timestampMs() < segment.endMs();
+            default -> false;
+        });
     }
 }

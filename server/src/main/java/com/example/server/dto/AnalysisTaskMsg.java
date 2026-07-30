@@ -1,5 +1,7 @@
 package com.example.server.dto;
 
+import com.example.server.entity.AnalysisMode;
+
 import java.io.Serializable;
 
 //必须实现Serializable接口，否则不能在网络上传输
@@ -8,17 +10,19 @@ public class AnalysisTaskMsg implements Serializable {
     private Long userId;
     private String action; //例如"START_ANALYSIS"
     private String contentHash;
+    private AnalysisMode analysisMode;
     private String userGoal;
     private String analysisRequestId;
 
     public AnalysisTaskMsg() {}
 
     public AnalysisTaskMsg(Long mediaId, Long userId, String action, String contentHash,
-                           String userGoal, String analysisRequestId) {
+                           AnalysisMode analysisMode, String userGoal, String analysisRequestId) {
         this.mediaId = mediaId;
         this.userId = userId;
         this.action = action;
         this.contentHash = contentHash;
+        this.analysisMode = analysisMode;
         this.userGoal = userGoal;
         this.analysisRequestId = analysisRequestId;
     }
@@ -31,6 +35,8 @@ public class AnalysisTaskMsg implements Serializable {
     public void setAction(String action) { this.action = action; }
     public String getContentHash() { return contentHash; }
     public void setContentHash(String contentHash) { this.contentHash = contentHash; }
+    public AnalysisMode getAnalysisMode() { return analysisMode; }
+    public void setAnalysisMode(AnalysisMode analysisMode) { this.analysisMode = analysisMode; }
     public String getUserGoal() { return userGoal; }
     public void setUserGoal(String userGoal) { this.userGoal = userGoal; }
     public String getAnalysisRequestId() { return analysisRequestId; }

@@ -202,12 +202,15 @@ public class MediaController {
                                      @RequestBody(required = false) Map<String, Object> request) {
         try {
             Long currentUserId = UserContext.requireUserId();
+            String mode = request == null || request.get("mode") == null
+                    ? null
+                    : String.valueOf(request.get("mode"));
             String goal = request == null || request.get("goal") == null
                     ? null
                     : String.valueOf(request.get("goal"));
 
             Map<String, Object> result = mediaAnalysisTaskService
-                    .submitAnalysis(mediaId, currentUserId, goal, force);
+                    .submitAnalysis(mediaId, currentUserId, mode, goal, force);
             return "REUSED".equals(result.get("status"))
                     ? ResponseEntity.ok(result)
                     : ResponseEntity.status(202).body(result);

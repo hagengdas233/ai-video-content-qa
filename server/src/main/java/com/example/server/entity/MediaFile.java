@@ -27,6 +27,7 @@ public class MediaFile {
 
     private AnalysisStatus analysisStatus;
     private String analysisRequestId;
+    private AnalysisMode analysisMode;
     private String analysisGoal;
     private String analysisError;
     private LocalDateTime analysisStartedAt;

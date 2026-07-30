@@ -3,6 +3,7 @@ package com.example.server.service;
 import com.example.server.dto.AgentState;
 import com.example.server.dto.AiAnalysisOutput;
 import com.example.server.dto.VideoContext;
+import com.example.server.entity.AnalysisMode;
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
 import com.example.server.strategy.AiAnalysisStrategy;
@@ -32,7 +33,7 @@ public class AiService {
     @Autowired
     private AgentLoopService agentLoopService;
 
-    public AiAnalysisOutput analyze(Long mediaId, String userGoal) {
+    public AiAnalysisOutput analyze(Long mediaId, AnalysisMode analysisMode, String userGoal) {
         System.out.println(" [线程池] 开始处理任务，ID: " + mediaId);
 
         MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
@@ -41,8 +42,12 @@ public class AiService {
         }
 
         try {
+            String normalizedGoal = analysisMode == AnalysisMode.FULL
+                    ? AnalysisMode.FULL_INTERNAL_GOAL
+                    : userGoal;
             // ASR + 场景关键帧 OCR 按时间轴合并为统一上下文
-            VideoContext videoContext = videoContextService.build(mediaFile.getFilePath(), userGoal);
+            VideoContext videoContext = videoContextService.build(
+                    mediaFile.getFilePath(), analysisMode, normalizedGoal);
 
             // Planner -> Executor -> Critic，最多两轮后强制结束
             AgentState agentState = agentLoopService.run(videoContext);

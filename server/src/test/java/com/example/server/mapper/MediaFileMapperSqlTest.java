@@ -12,9 +12,11 @@ class MediaFileMapperSqlTest {
 
     @Test
     void queueAnalysisUsesExactStatusAndNullSafeRequestIdCas() throws Exception {
-        String sql = updateSql("queueAnalysis", Long.class, String.class, String.class,
+        String sql = updateSql("queueAnalysis", Long.class, String.class,
+                com.example.server.entity.AnalysisMode.class, String.class,
                 com.example.server.entity.AnalysisStatus.class, String.class);
 
+        assertTrue(sql.contains("analysis_mode = #{analysisMode"));
         assertTrue(sql.contains("analysis_status = #{expectedAnalysisStatus"));
         assertTrue(sql.contains("expectedAnalysisStatus") && sql.contains("analysis_status IS NULL"));
         assertTrue(sql.contains("analysis_request_id <=> #{expectedAnalysisRequestId"));

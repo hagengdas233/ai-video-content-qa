@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS `media_files` (
   `analysis_status` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'NOT_STARTED'
     COMMENT 'NOT_STARTED, QUEUED, RUNNING, SUCCESS, FAILED',
   `analysis_request_id` char(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Current analysis request UUID',
+  `analysis_mode` varchar(10) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'FULL'
+    COMMENT 'FULL or GOAL',
   `analysis_goal` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Current analysis goal',
   `analysis_error` varchar(1000) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Most recent analysis error',
   `analysis_started_at` datetime DEFAULT NULL COMMENT 'Current analysis start time',
@@ -42,6 +44,8 @@ CREATE TABLE IF NOT EXISTS `media_files` (
   UNIQUE KEY `uk_media_files_analysis_request_id` (`analysis_request_id`),
   CONSTRAINT `chk_media_files_analysis_status`
     CHECK (`analysis_status` IN ('NOT_STARTED', 'QUEUED', 'RUNNING', 'SUCCESS', 'FAILED')),
+  CONSTRAINT `chk_media_files_analysis_mode`
+    CHECK (`analysis_mode` IN ('FULL', 'GOAL')),
   CONSTRAINT `fk_media_files_user_id`
     FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
     ON DELETE SET NULL

@@ -1,6 +1,7 @@
 package com.example.server.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.example.server.entity.AnalysisMode;
 import com.example.server.entity.AnalysisStatus;
 import com.example.server.entity.MediaFile;
 import org.apache.ibatis.annotations.Mapper;
@@ -16,6 +17,7 @@ public interface MediaFileMapper extends BaseMapper<MediaFile> {
             UPDATE media_files
             SET analysis_status = 'QUEUED',
                 analysis_request_id = #{analysisRequestId},
+                analysis_mode = #{analysisMode,jdbcType=VARCHAR},
                 analysis_goal = #{analysisGoal,jdbcType=VARCHAR},
                 analysis_error = NULL,
                 analysis_started_at = NULL,
@@ -29,6 +31,7 @@ public interface MediaFileMapper extends BaseMapper<MediaFile> {
             """)
     int queueAnalysis(@Param("mediaId") Long mediaId,
                       @Param("analysisRequestId") String analysisRequestId,
+                      @Param("analysisMode") AnalysisMode analysisMode,
                       @Param("analysisGoal") String analysisGoal,
                       @Param("expectedAnalysisStatus") AnalysisStatus expectedAnalysisStatus,
                       @Param("expectedAnalysisRequestId") String expectedAnalysisRequestId);

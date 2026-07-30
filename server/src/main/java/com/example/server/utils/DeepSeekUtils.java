@@ -4,12 +4,14 @@ import com.example.server.dto.AgentState;
 import com.example.server.dto.AnalysisResult;
 import com.example.server.dto.VideoChunk;
 import com.example.server.dto.VideoContext;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Component
@@ -67,7 +69,8 @@ public class DeepSeekUtils {
         try {
             String prompt = """
                     你是 Video Agent 的 Planner。理解用户目标，并拆成 3 到 5 个可执行任务。
-                    任务必须能够仅依靠 VideoContext 中的 ASR、OCR 和时间戳证据完成。
+                    任务必须能够仅依靠 VideoContext 中的 ASR、OCR、CHUNK_SUMMARY 和时间戳证据完成。
+                    CHUNK_SUMMARY 是对应时间区间的压缩摘要，不是逐字 ASR 或原始 OCR。
                     只返回 JSON：
                     {
                       "understoodGoal": "对用户目标的明确理解",
@@ -75,7 +78,7 @@ public class DeepSeekUtils {
                     }
                     VideoContext:
                     """ + objectMapper.writeValueAsString(context);
-            return parseJson(chatModel.chat(prompt), AgentState.AgentPlan.class);
+            return parsePlanResponse(chatModel.chat(prompt));
         } catch (Exception e) {
             throw new IllegalStateException("Agent 任务规划失败", e);
         }
@@ -104,7 +107,10 @@ public class DeepSeekUtils {
         try {
             String prompt = """
                     你是 Video Agent 的 Executor。按照计划分析 VideoContext 并生成结构化产物。
-                    所有重要结论必须绑定真实 timestampMs，并标明来源为 ASR 或 OCR。
+                    所有重要结论必须绑定 VideoContext 中存在的真实 timestampMs，
+                    并将来源准确标明为 ASR、OCR 或 CHUNK_SUMMARY。
+                    使用 CHUNK_SUMMARY 时只能引用该摘要片段的 startMs，并明确这是区间级摘要证据，
+                    不得伪装成逐字 ASR、原始 OCR 或更精确的秒级证据。
                     不得使用视频上下文之外的事实。
                     如果存在 Critic 反馈，必须逐项修正。
 
@@ -113,7 +119,7 @@ public class DeepSeekUtils {
                       "title": "产物标题",
                       "conclusions": ["结论"],
                       "evidence": [
-                        {"timestampMs": 120000, "source": "ASR或OCR", "content": "证据内容"}
+                        {"timestampMs": 120000, "source": "ASR、OCR或CHUNK_SUMMARY", "content": "证据内容"}
                       ],
                       "suggestions": ["建议"]
                     }
@@ -140,7 +146,8 @@ public class DeepSeekUtils {
                     你是 Video Agent 的 Critic，只负责检查，不负责改写产物。
                     检查标准：
                     1. 是否覆盖用户目标和 Planner 的全部任务；
-                    2. 每个重要结论是否能在 VideoContext 中找到时间戳证据；
+                    2. 每个重要结论是否能在 VideoContext 中找到时间戳证据，且 ASR、OCR、
+                       CHUNK_SUMMARY 来源标注准确；
                     3. 是否存在上下文不支持的结论；
                     4. title、conclusions、evidence、suggestions 是否完整。
 
@@ -170,10 +177,45 @@ public class DeepSeekUtils {
     }
 
     private <T> T parseJson(String response, Class<T> type) throws Exception {
-        String json = response
+        return objectMapper.readValue(stripCodeFence(response), type);
+    }
+
+    AgentState.AgentPlan parsePlanResponse(String response) throws Exception {
+        JsonNode root = objectMapper.readTree(stripCodeFence(response));
+        List<String> tasks = new ArrayList<>();
+        JsonNode taskNodes = root.path("tasks");
+        if (taskNodes.isArray()) {
+            for (JsonNode taskNode : taskNodes) {
+                String task = taskNode.isTextual()
+                        ? taskNode.asText()
+                        : flattenTaskObject(taskNode);
+                if (task != null && !task.isBlank()) {
+                    tasks.add(task.trim());
+                }
+            }
+        } else if (taskNodes.isTextual() && !taskNodes.asText().isBlank()) {
+            tasks.add(taskNodes.asText().trim());
+        }
+        return new AgentState.AgentPlan(root.path("understoodGoal").asText(""), tasks);
+    }
+
+    private String flattenTaskObject(JsonNode taskNode) {
+        if (!taskNode.isObject()) {
+            return taskNode.asText("");
+        }
+        List<String> parts = new ArrayList<>();
+        taskNode.fields().forEachRemaining(field -> {
+            if (field.getValue().isValueNode() && !field.getValue().asText().isBlank()) {
+                parts.add(field.getValue().asText().trim());
+            }
+        });
+        return String.join(" - ", parts);
+    }
+
+    private String stripCodeFence(String response) {
+        return response
                 .replace("```json", "")
                 .replace("```", "")
                 .trim();
-        return objectMapper.readValue(json, type);
     }
 }

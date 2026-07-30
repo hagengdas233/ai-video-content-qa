@@ -47,13 +47,14 @@ public class DebugController {
     //AI总结接口(分布式锁 + 限流 + MQ)
     @GetMapping("/ai")
     public String aiAnalyze(@RequestParam Long id,
-                            @RequestParam(defaultValue = "理解视频核心内容并生成结构化分析报告") String goal,
+                            @RequestParam(defaultValue = "FULL") String mode,
+                            @RequestParam(required = false) String goal,
                             @RequestParam(defaultValue = "false") boolean force) {
         try {
             MediaFile file = mediaFileMapper.selectById(id);
             if (file == null) return "文件不存在";
             return mediaAnalysisTaskService
-                    .submitAnalysis(id, file.getUserId(), goal, force)
+                    .submitAnalysis(id, file.getUserId(), mode, goal, force)
                     .toString();
 
         } catch (Exception e) {

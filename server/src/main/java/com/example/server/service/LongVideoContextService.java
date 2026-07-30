@@ -2,6 +2,7 @@ package com.example.server.service;
 
 import com.example.server.dto.VideoChunk;
 import com.example.server.dto.VideoContext;
+import com.example.server.entity.AnalysisMode;
 import com.example.server.utils.DeepSeekUtils;
 import com.example.server.utils.EmbeddingUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,10 +30,22 @@ public class LongVideoContextService {
             return context;
         }
 
-        List<VideoChunk> chunks = buildChunks(context.segments());
+        List<VideoChunk> chunks = summarizeChunks(context.segments());
+        if (context.analysisMode() == AnalysisMode.FULL) {
+            List<VideoContext.VideoSegment> summarySegments = chunks.stream()
+                    .sorted(Comparator.comparingLong(VideoChunk::startTime))
+                    .map(this::toSummarySegment)
+                    .toList();
+            return new VideoContext(
+                    context.source(), context.analysisMode(), context.userGoal(), summarySegments);
+        }
+
+        List<VideoChunk> embeddedChunks = chunks.stream()
+                .map(this::withEmbedding)
+                .toList();
         List<Double> queryEmbedding = embeddingUtils.embed(context.userGoal());
 
-        List<VideoContext.VideoSegment> selectedSegments = chunks.stream()
+        List<VideoContext.VideoSegment> selectedSegments = embeddedChunks.stream()
                 .sorted(Comparator.comparingDouble(
                         (VideoChunk chunk) -> cosine(queryEmbedding, chunk.embedding())
                 ).reversed())
@@ -41,10 +54,11 @@ public class LongVideoContextService {
                 .sorted(Comparator.comparingLong(VideoContext.VideoSegment::startMs))
                 .toList();
 
-        return new VideoContext(context.source(), context.userGoal(), selectedSegments);
+        return new VideoContext(
+                context.source(), context.analysisMode(), context.userGoal(), selectedSegments);
     }
 
-    private List<VideoChunk> buildChunks(List<VideoContext.VideoSegment> segments) {
+    private List<VideoChunk> summarizeChunks(List<VideoContext.VideoSegment> segments) {
         List<VideoChunk> chunks = new ArrayList<>();
         for (long start = 0; start <= segments.get(segments.size() - 1).startMs(); start += CHUNK_MS) {
             long end = start + CHUNK_MS;
@@ -55,17 +69,42 @@ public class LongVideoContextService {
             if (rawSegments.isEmpty()) continue;
 
             VideoChunk.ChunkSummary summary = deepSeekUtils.summarizeChunk(rawSegments);
-            String embeddingText = summary.segmentSummary() + "\n" + String.join(" ", summary.keywords());
             chunks.add(new VideoChunk(
                     start,
-                    end,
+                    rawSegments.get(rawSegments.size() - 1).endMs(),
                     summary.segmentSummary(),
                     summary.keywords(),
                     rawSegments,
-                    embeddingUtils.embed(embeddingText)
+                    List.of()
             ));
         }
         return chunks;
+    }
+
+    private VideoChunk withEmbedding(VideoChunk chunk) {
+        String embeddingText = chunk.segmentSummary() + "\n" + String.join(" ", chunk.keywords());
+        return new VideoChunk(
+                chunk.startTime(),
+                chunk.endTime(),
+                chunk.segmentSummary(),
+                chunk.keywords(),
+                chunk.rawSegments(),
+                embeddingUtils.embed(embeddingText)
+        );
+    }
+
+    private VideoContext.VideoSegment toSummarySegment(VideoChunk chunk) {
+        String keywords = chunk.keywords().isEmpty()
+                ? ""
+                : "\n关键词：" + String.join("、", chunk.keywords());
+        return new VideoContext.VideoSegment(
+                chunk.startTime(),
+                chunk.endTime(),
+                "片段摘要：" + chunk.segmentSummary() + keywords,
+                "CHUNK_SUMMARY",
+                List.of(),
+                List.of()
+        );
     }
 
     private double cosine(List<Double> left, List<Double> right) {
