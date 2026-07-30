@@ -68,26 +68,35 @@ class VideoAnalysisConsumerTest {
     }
 
     @Test
-    void onMessageDoesNotReturnUntilAiAndSuccessPersistenceComplete() throws Exception {
+    void noMatchResultIsPersistedAsSuccessBeforeListenerReturns() throws Exception {
+        String noMatchSummary = """
+                ## 目标分析结果
+
+                ## 核心结论
+                - 视频内容不足以支持该分析目标
+                """;
         MediaFile file = media(AnalysisStatus.QUEUED, REQUEST_ID, "## old result");
         stubOwnedLock();
         when(mediaFileMapper.selectById(1L)).thenReturn(file);
         when(mediaFileMapper.markAnalysisRunning(eq(1L), eq(REQUEST_ID), any(LocalDateTime.class)))
                 .thenReturn(1);
         when(aiService.analyze(1L, AnalysisMode.GOAL, "goal"))
-                .thenReturn(new AiAnalysisOutput("new transcript", "## new result"));
+                .thenReturn(new AiAnalysisOutput("new transcript", noMatchSummary));
         when(mediaFileMapper.markAnalysisSuccess(
-                eq(1L), eq(REQUEST_ID), eq("new transcript"), eq("## new result"), any(LocalDateTime.class)))
+                eq(1L), eq(REQUEST_ID), eq("new transcript"), eq(noMatchSummary), any(LocalDateTime.class)))
                 .thenReturn(1);
 
         consumer.onMessage(message(REQUEST_ID));
 
-        InOrder completionOrder = inOrder(aiService, mediaFileMapper);
+        InOrder completionOrder = inOrder(
+                aiService, mediaFileMapper, activeKeyService, lock);
         completionOrder.verify(aiService).analyze(1L, AnalysisMode.GOAL, "goal");
         completionOrder.verify(mediaFileMapper).markAnalysisSuccess(
-                eq(1L), eq(REQUEST_ID), eq("new transcript"), eq("## new result"), any(LocalDateTime.class));
-        verify(activeKeyService).deleteIfOwned(AnalysisRedisKeys.active(7L, HASH), REQUEST_ID);
-        verify(lock).unlock();
+                eq(1L), eq(REQUEST_ID), eq("new transcript"), eq(noMatchSummary), any(LocalDateTime.class));
+        completionOrder.verify(activeKeyService)
+                .deleteIfOwned(AnalysisRedisKeys.active(7L, HASH), REQUEST_ID);
+        completionOrder.verify(lock).unlock();
+        verify(mediaFileMapper, never()).markExecutionFailed(any(), any(), any(), any());
         assertEquals("## old result", file.getAiSummary());
     }
 

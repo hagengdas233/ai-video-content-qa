@@ -154,8 +154,10 @@ class MediaAnalysisTaskServiceTest {
     }
 
     @Test
-    void sameGoalModeAndNormalizedGoalAreReused() {
-        MediaFile file = media(9L, 7L, HASH, AnalysisStatus.SUCCESS, "## existing result");
+    void sameGoalNoMatchSuccessIsReusedWithoutRedisOrMq() {
+        MediaFile file = media(
+                9L, 7L, HASH, AnalysisStatus.SUCCESS,
+                "## 目标分析结果\n\n- 视频内容不足以支持该分析目标");
         file.setAnalysisMode(AnalysisMode.GOAL);
         file.setAnalysisGoal("find launch risks");
         file.setAnalysisRequestId(UUID.randomUUID().toString());
@@ -205,8 +207,10 @@ class MediaAnalysisTaskServiceTest {
     }
 
     @Test
-    void changingGoalCreatesNewRequestWithoutForce() {
-        MediaFile file = media(15L, 7L, HASH, AnalysisStatus.SUCCESS, "## old goal result");
+    void differentGoalDoesNotReuseNoMatchSuccess() {
+        MediaFile file = media(
+                15L, 7L, HASH, AnalysisStatus.SUCCESS,
+                "## 目标分析结果\n\n- 视频内容不足以支持该分析目标");
         file.setAnalysisMode(AnalysisMode.GOAL);
         file.setAnalysisGoal("old goal");
         file.setAnalysisRequestId("66666666-6666-4666-8666-666666666666");

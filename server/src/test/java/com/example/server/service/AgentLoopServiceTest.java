@@ -2,6 +2,7 @@ package com.example.server.service;
 
 import com.example.server.dto.AgentState;
 import com.example.server.dto.AnalysisResult;
+import com.example.server.dto.ContextSelectionResult;
 import com.example.server.dto.VideoContext;
 import com.example.server.entity.AnalysisMode;
 import com.example.server.utils.DeepSeekUtils;
@@ -22,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -121,6 +123,40 @@ class AgentLoopServiceTest {
     }
 
     @Test
+    void noMatchReturnsDeterministicResultWithoutCallingAnyAgent() {
+        VideoContext emptyContext = new VideoContext(
+                "video.mp4", AnalysisMode.GOAL, "goal", List.of());
+        when(longVideoContextService.selectRelevant(context))
+                .thenReturn(new ContextSelectionResult(
+                        ContextSelectionResult.Status.NO_MATCH, emptyContext));
+
+        AgentState state = service.run(context);
+
+        assertEquals("goal", state.goal());
+        assertNull(state.plan());
+        assertNull(state.critique());
+        assertEquals(0, state.round());
+        assertEquals("目标分析结果", state.result().title());
+        assertEquals(List.of("视频内容不足以支持该分析目标"),
+                state.result().conclusions());
+        assertEquals(List.of(), state.result().evidence());
+        assertEquals(List.of("可调整分析目标后重新提交"),
+                state.result().suggestions());
+        assertEquals("""
+                ## 目标分析结果
+
+                ## 核心结论
+                - 视频内容不足以支持该分析目标
+
+                ## 视频证据
+
+                ## 建议
+                - 可调整分析目标后重新提交
+                """, state.result().toMarkdown());
+        verifyNoInteractions(deepSeekUtils);
+    }
+
+    @Test
     void evidenceMustMatchRawSourceAndTimestampInterval() {
         AnalysisResult result = new AnalysisResult(
                 "title",
@@ -179,7 +215,8 @@ class AgentLoopServiceTest {
     }
 
     private void stubRelevantContext() {
-        when(longVideoContextService.selectRelevant(context)).thenReturn(relevantContext);
+        when(longVideoContextService.selectRelevant(context))
+                .thenReturn(ContextSelectionResult.matched(relevantContext));
         when(deepSeekUtils.plan(relevantContext)).thenReturn(plan);
     }
 
