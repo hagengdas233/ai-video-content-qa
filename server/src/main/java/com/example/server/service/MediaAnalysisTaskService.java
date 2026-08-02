@@ -75,11 +75,11 @@ public class MediaAnalysisTaskService {
         AnalysisStatus expectedAnalysisStatus = file.getAnalysisStatus();
         String expectedAnalysisRequestId = file.getAnalysisRequestId();
         AnalysisStatus currentStatus = AnalysisStatus.effective(file.getAnalysisStatus(), file.getAiSummary());
-        if (!force && currentStatus == AnalysisStatus.SUCCESS && matches(file, normalized)) {
-            return result(file, normalized, "REUSED", "Existing analysis result reused");
-        }
         if (currentStatus.isInProgress()) {
             return result(file, "RUNNING", "Analysis task is already running");
+        }
+        if (!force && matchesResult(file, normalized)) {
+            return result(file, "REUSED", "Existing analysis result reused");
         }
 
         RRateLimiter rateLimiter = redissonClient.getRateLimiter(GLOBAL_LIMIT_KEY);
@@ -93,7 +93,7 @@ public class MediaAnalysisTaskService {
         String analysisRequestId = UUID.randomUUID().toString();
 
         if (!activeKeyService.tryAcquire(activeKey, analysisRequestId, Duration.ofHours(2))) {
-            Map<String, Object> running = result(file, contentHash, normalized,
+            Map<String, Object> running = result(file, contentHash,
                     "RUNNING", "Analysis task is already running");
             // This request did not acquire ownership and did not create a requestId.
             // Do not expose the media row's previous requestId as if it belonged to this submission.
@@ -117,7 +117,7 @@ public class MediaAnalysisTaskService {
 
         if (queuedRows == 0) {
             deleteActiveKeySafely(activeKey, analysisRequestId);
-            return resolveQueueConflict(mediaId, currentUserId, normalized);
+            return resolveQueueConflict(mediaId, currentUserId, normalized, force);
         }
 
         try {
@@ -129,8 +129,9 @@ public class MediaAnalysisTaskService {
             rocketMQTemplate.convertAndSend(ANALYSIS_TOPIC, msg);
 
             Map<String, Object> result = result(
-                    file, contentHash, normalized, "SUBMITTED", "Analysis task submitted");
-            result.put("analysisRequestId", analysisRequestId);
+                    file, contentHash, "SUBMITTED", "Analysis task submitted");
+            putAnalysisMetadata(result, analysisRequestId, normalized,
+                    AnalysisStatus.QUEUED, null, null, null);
             return result;
         } catch (Exception e) {
             deleteActiveKeySafely(activeKey, analysisRequestId);
@@ -151,7 +152,8 @@ public class MediaAnalysisTaskService {
     }
 
     private Map<String, Object> resolveQueueConflict(Long mediaId, Long currentUserId,
-                                                     NormalizedAnalysis normalized) {
+                                                     NormalizedAnalysis normalized,
+                                                     boolean force) {
         MediaFile latest = mediaFileMapper.selectById(mediaId);
         if (latest == null) {
             throw new MediaNotFoundException("media disappeared while submitting analysis");
@@ -160,41 +162,59 @@ public class MediaAnalysisTaskService {
 
         AnalysisStatus latestStatus = AnalysisStatus.effective(
                 latest.getAnalysisStatus(), latest.getAiSummary());
-        if (latestStatus == AnalysisStatus.SUCCESS && matches(latest, normalized)) {
-            return result(latest, normalized, "REUSED",
-                    "Analysis completed while this request was being submitted");
-        }
         if (latestStatus.isInProgress()) {
             return result(latest, "RUNNING", "Another analysis request is already running");
+        }
+        if (!force && matchesResult(latest, normalized)) {
+            return result(latest, "REUSED",
+                    "Analysis completed while this request was being submitted");
         }
         throw new AnalysisStateConflictException(
                 "analysis state changed to " + latestStatus + " and cannot be safely queued");
     }
 
     private Map<String, Object> result(MediaFile file, String status, String message) {
-        return result(file, file.getContentHash(), normalizedFrom(file), status, message);
-    }
-
-    private Map<String, Object> result(MediaFile file, NormalizedAnalysis normalized,
-                                       String status, String message) {
-        return result(file, file.getContentHash(), normalized, status, message);
+        return result(file, file.getContentHash(), status, message);
     }
 
     private Map<String, Object> result(MediaFile file, String contentHash,
-                                       NormalizedAnalysis normalized, String status, String message) {
+                                       String status, String message) {
         Map<String, Object> result = new HashMap<>();
         result.put("mediaId", file.getId());
         if (contentHash != null) {
             result.put("contentHash", contentHash);
         }
-        if (file.getAnalysisRequestId() != null) {
-            result.put("analysisRequestId", file.getAnalysisRequestId());
-        }
-        result.put("analysisMode", normalized.mode());
-        result.put("analysisGoal", normalized.goal());
+        putAnalysisMetadata(result, file.getAnalysisRequestId(), normalizedAnalysisFrom(file),
+                file.getAnalysisStatus() == null ? AnalysisStatus.NOT_STARTED : file.getAnalysisStatus(),
+                file.getAnalysisError(), file.getAnalysisStartedAt(), file.getAnalysisFinishedAt());
+        putResultMetadata(result, file);
         result.put("status", status);
         result.put("message", message);
         return result;
+    }
+
+    private void putAnalysisMetadata(Map<String, Object> result,
+                                     String requestId,
+                                     NormalizedAnalysis normalized,
+                                     AnalysisStatus status,
+                                     String error,
+                                     LocalDateTime startedAt,
+                                     LocalDateTime finishedAt) {
+        result.put("analysisRequestId", requestId);
+        result.put("analysisMode", normalized.mode());
+        result.put("analysisGoal", normalized.goal());
+        result.put("analysisStatus", status);
+        result.put("analysisError", error);
+        result.put("analysisStartedAt", startedAt);
+        result.put("analysisFinishedAt", finishedAt);
+    }
+
+    private void putResultMetadata(Map<String, Object> result, MediaFile file) {
+        NormalizedAnalysis normalizedResult = normalizedResultFrom(file);
+        result.put("resultRequestId", file.getResultRequestId());
+        result.put("resultMode", normalizedResult == null ? null : normalizedResult.mode());
+        result.put("resultGoal", normalizedResult == null ? null : normalizedResult.goal());
+        result.put("resultFinishedAt", file.getResultFinishedAt());
     }
 
     private void deleteActiveKeySafely(String activeKey, String analysisRequestId) {
@@ -234,7 +254,7 @@ public class MediaAnalysisTaskService {
         return new NormalizedAnalysis(analysisMode, userGoal);
     }
 
-    private NormalizedAnalysis normalizedFrom(MediaFile file) {
+    private NormalizedAnalysis normalizedAnalysisFrom(MediaFile file) {
         AnalysisMode mode = file.getAnalysisMode() == null ? AnalysisMode.FULL : file.getAnalysisMode();
         if (mode == AnalysisMode.FULL) {
             return new NormalizedAnalysis(mode, AnalysisMode.FULL_INTERNAL_GOAL);
@@ -243,8 +263,27 @@ public class MediaAnalysisTaskService {
         return new NormalizedAnalysis(mode, goal);
     }
 
-    private boolean matches(MediaFile file, NormalizedAnalysis requested) {
-        NormalizedAnalysis persisted = normalizedFrom(file);
+    private NormalizedAnalysis normalizedResultFrom(MediaFile file) {
+        AnalysisMode mode = file.getResultMode();
+        if (mode == null) {
+            return null;
+        }
+        if (mode == AnalysisMode.FULL) {
+            return new NormalizedAnalysis(mode, AnalysisMode.FULL_INTERNAL_GOAL);
+        }
+        String goal = file.getResultGoal() == null ? null : file.getResultGoal().trim();
+        return new NormalizedAnalysis(mode, goal);
+    }
+
+    private boolean matchesResult(MediaFile file, NormalizedAnalysis requested) {
+        if (file.getResultRequestId() == null
+                || !AnalysisStatus.isLegacySuccessfulSummary(file.getAiSummary())) {
+            return false;
+        }
+        NormalizedAnalysis persisted = normalizedResultFrom(file);
+        if (persisted == null) {
+            return false;
+        }
         return persisted.mode() == requested.mode()
                 && Objects.equals(persisted.goal(), requested.goal());
     }

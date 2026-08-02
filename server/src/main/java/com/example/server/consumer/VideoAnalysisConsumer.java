@@ -124,10 +124,15 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
             AnalysisMode analysisMode = msg.getAnalysisMode() == null
                     ? AnalysisMode.FULL
                     : msg.getAnalysisMode();
-            AiAnalysisOutput output = aiService.analyze(mediaId, analysisMode, msg.getUserGoal());
+            String analysisGoal = analysisMode == AnalysisMode.FULL
+                    ? AnalysisMode.FULL_INTERNAL_GOAL
+                    : msg.getUserGoal();
+            AiAnalysisOutput output = aiService.analyze(mediaId, analysisMode, analysisGoal);
             if (mediaFileMapper.markAnalysisSuccess(
                     mediaId,
                     analysisRequestId,
+                    analysisMode,
+                    analysisGoal,
                     output.transcriptText(),
                     output.aiSummary(),
                     LocalDateTime.now()) == 1) {

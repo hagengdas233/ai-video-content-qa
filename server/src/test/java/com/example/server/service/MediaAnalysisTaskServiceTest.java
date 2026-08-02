@@ -49,6 +49,7 @@ class MediaAnalysisTaskServiceTest {
 
     private static final String HASH = "0123456789abcdef0123456789abcdef";
     private static final String OTHER_HASH = "abcdef0123456789abcdef0123456789";
+    private static final String RESULT_REQUEST_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     private static final String FULL_GOAL =
             "Summarize the complete video in chronological order and generate a structured analysis report";
 
@@ -94,6 +95,8 @@ class MediaAnalysisTaskServiceTest {
 
         assertEquals("REUSED", result.get("status"));
         assertEquals(file.getAnalysisRequestId(), result.get("analysisRequestId"));
+        assertEquals(RESULT_REQUEST_ID, result.get("resultRequestId"));
+        assertEquals(AnalysisMode.FULL, result.get("resultMode"));
         verifyNoInteractions(activeKeyService, rocketMQTemplate, redissonClient);
         verify(mediaFileMapper, never()).queueAnalysis(any(), any(), any(), any(), any(), any());
     }
@@ -111,6 +114,9 @@ class MediaAnalysisTaskServiceTest {
         assertNotNull(requestId);
         UUID.fromString(requestId);
         assertEquals("## old result", file.getAiSummary());
+        assertEquals(RESULT_REQUEST_ID, result.get("resultRequestId"));
+        assertEquals(AnalysisMode.FULL, result.get("resultMode"));
+        assertEquals(FULL_GOAL, result.get("resultGoal"));
         verify(activeKeyService).tryAcquire(
                 AnalysisRedisKeys.active(7L, HASH), requestId, Duration.ofHours(2));
         verify(mediaFileMapper).queueAnalysis(
@@ -161,6 +167,8 @@ class MediaAnalysisTaskServiceTest {
         file.setAnalysisMode(AnalysisMode.GOAL);
         file.setAnalysisGoal("find launch risks");
         file.setAnalysisRequestId(UUID.randomUUID().toString());
+        file.setResultMode(AnalysisMode.GOAL);
+        file.setResultGoal("find launch risks");
         when(mediaFileMapper.selectById(9L)).thenReturn(file);
 
         Map<String, Object> result = service.submitAnalysis(
@@ -178,6 +186,8 @@ class MediaAnalysisTaskServiceTest {
         file.setAnalysisMode(AnalysisMode.FULL);
         file.setAnalysisGoal("legacy goal retained by migration");
         file.setAnalysisRequestId("77777777-7777-4777-8777-777777777777");
+        file.setResultMode(AnalysisMode.FULL);
+        file.setResultGoal("legacy goal retained by migration");
         when(mediaFileMapper.selectById(16L)).thenReturn(file);
 
         Map<String, Object> result = service.submitAnalysis(16L, 7L, null, null, false);
@@ -214,6 +224,8 @@ class MediaAnalysisTaskServiceTest {
         file.setAnalysisMode(AnalysisMode.GOAL);
         file.setAnalysisGoal("old goal");
         file.setAnalysisRequestId("66666666-6666-4666-8666-666666666666");
+        file.setResultMode(AnalysisMode.GOAL);
+        file.setResultGoal("old goal");
         when(mediaFileMapper.selectById(15L)).thenReturn(file);
         stubAcceptedSubmission(file);
 
@@ -246,8 +258,8 @@ class MediaAnalysisTaskServiceTest {
                 17L, 7L, "GOAL", "new target", false);
 
         assertEquals("RUNNING", result.get("status"));
-        assertEquals(AnalysisMode.GOAL, result.get("analysisMode"));
-        assertEquals("new target", result.get("analysisGoal"));
+        assertEquals(AnalysisMode.FULL, result.get("analysisMode"));
+        assertEquals(FULL_GOAL, result.get("analysisGoal"));
         org.junit.jupiter.api.Assertions.assertFalse(result.containsKey("analysisRequestId"));
         verify(mediaFileMapper, never()).queueAnalysis(any(), any(), any(), any(), any(), any());
         verifyNoInteractions(rocketMQTemplate);
@@ -256,11 +268,11 @@ class MediaAnalysisTaskServiceTest {
     @ParameterizedTest
     @EnumSource(value = AnalysisStatus.class, names = {"QUEUED", "RUNNING"})
     void inProgressAnalysisDoesNotCreateAnotherRequestOrSendMq(AnalysisStatus status) {
-        MediaFile file = media(3L, 7L, HASH, status, null);
+        MediaFile file = media(3L, 7L, HASH, status, "## old result");
         file.setAnalysisRequestId(UUID.randomUUID().toString());
         when(mediaFileMapper.selectById(3L)).thenReturn(file);
 
-        Map<String, Object> result = service.submitAnalysis(3L, 7L, null, true);
+        Map<String, Object> result = service.submitAnalysis(3L, 7L, null, false);
 
         assertEquals("RUNNING", result.get("status"));
         verifyNoInteractions(activeKeyService, rocketMQTemplate, redissonClient);
@@ -365,14 +377,67 @@ class MediaAnalysisTaskServiceTest {
     }
 
     @Test
-    void historicalRealSummaryWithDefaultStatusIsReused() {
+    void unattributedHistoricalSummaryIsNotReused() {
         MediaFile file = media(5L, 7L, HASH, AnalysisStatus.NOT_STARTED, "## historical result");
+        file.setResultRequestId(null);
+        file.setResultMode(null);
+        file.setResultGoal(null);
         when(mediaFileMapper.selectById(5L)).thenReturn(file);
+        stubAcceptedSubmission(file);
 
         Map<String, Object> result = service.submitAnalysis(5L, 7L, null, false);
 
+        assertEquals("SUBMITTED", result.get("status"));
+        verify(rocketMQTemplate).convertAndSend(eq("video-analysis-topic"), any(AnalysisTaskMsg.class));
+    }
+
+    @Test
+    void failedBStillReusesSuccessfulAByResultMetadata() {
+        MediaFile file = media(23L, 7L, HASH, AnalysisStatus.FAILED, "## result A");
+        file.setAnalysisRequestId("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+        file.setAnalysisMode(AnalysisMode.GOAL);
+        file.setAnalysisGoal("question B");
+        file.setAnalysisError("provider unavailable");
+        file.setResultRequestId(RESULT_REQUEST_ID);
+        file.setResultMode(AnalysisMode.GOAL);
+        file.setResultGoal("question A");
+        when(mediaFileMapper.selectById(23L)).thenReturn(file);
+
+        Map<String, Object> result = service.submitAnalysis(
+                23L, 7L, "GOAL", "question A", false);
+
         assertEquals("REUSED", result.get("status"));
+        assertEquals("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", result.get("analysisRequestId"));
+        assertEquals(AnalysisMode.GOAL, result.get("analysisMode"));
+        assertEquals("question B", result.get("analysisGoal"));
+        assertEquals(AnalysisStatus.FAILED, result.get("analysisStatus"));
+        assertEquals(RESULT_REQUEST_ID, result.get("resultRequestId"));
+        assertEquals(AnalysisMode.GOAL, result.get("resultMode"));
+        assertEquals("question A", result.get("resultGoal"));
         verifyNoInteractions(activeKeyService, rocketMQTemplate, redissonClient);
+    }
+
+    @Test
+    void failedBCanBeRetriedWithoutReusingSuccessfulA() {
+        MediaFile file = media(24L, 7L, HASH, AnalysisStatus.FAILED, "## result A");
+        file.setAnalysisRequestId("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+        file.setAnalysisMode(AnalysisMode.GOAL);
+        file.setAnalysisGoal("question B");
+        file.setResultRequestId(RESULT_REQUEST_ID);
+        file.setResultMode(AnalysisMode.GOAL);
+        file.setResultGoal("question A");
+        when(mediaFileMapper.selectById(24L)).thenReturn(file);
+        stubAcceptedSubmission(file);
+
+        Map<String, Object> result = service.submitAnalysis(
+                24L, 7L, "GOAL", "question B", false);
+
+        assertEquals("SUBMITTED", result.get("status"));
+        String retryRequestId = (String) result.get("analysisRequestId");
+        verify(mediaFileMapper).queueAnalysis(
+                24L, retryRequestId, AnalysisMode.GOAL, "question B",
+                AnalysisStatus.FAILED, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+        verify(rocketMQTemplate).convertAndSend(eq("video-analysis-topic"), any(AnalysisTaskMsg.class));
     }
 
     @Test
@@ -502,6 +567,12 @@ class MediaAnalysisTaskServiceTest {
         file.setAnalysisMode(AnalysisMode.FULL);
         file.setAnalysisGoal(FULL_GOAL);
         file.setAiSummary(aiSummary);
+        if (aiSummary != null) {
+            file.setResultRequestId(RESULT_REQUEST_ID);
+            file.setResultMode(AnalysisMode.FULL);
+            file.setResultGoal(FULL_GOAL);
+            file.setResultFinishedAt(LocalDateTime.of(2026, 8, 1, 12, 0));
+        }
         file.setFilePath("unused-in-unit-test");
         return file;
     }

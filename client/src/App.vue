@@ -346,10 +346,24 @@
               <div v-if="sidebar.statusText" class="analysis-notice" :class="sidebar.statusTone">
                 {{ sidebar.statusText }}
               </div>
-              <div v-if="sidebar.type === 'ai' && sidebar.analysisMode" class="analysis-result-meta">
-                <span class="analysis-result-mode">{{ analysisModeLabel(sidebar.analysisMode) }}</span>
+              <div v-if="sidebar.type === 'ai' && sidebar.analysisMode" class="analysis-task-meta">
+                <span class="analysis-task-label">
+                  最近任务 · {{ analysisStatusText(sidebar.analysisStatus) }} · {{ analysisModeLabel(sidebar.analysisMode) }}
+                </span>
                 <p v-if="sidebar.analysisMode === 'GOAL'">
-                  <strong>分析目标：</strong>{{ sidebar.analysisGoal }}
+                  <strong>任务目标：</strong>{{ sidebar.analysisGoal }}
+                </p>
+                <p v-if="sidebar.analysisError" class="analysis-task-error">
+                  <strong>错误：</strong>{{ sidebar.analysisError }}
+                </p>
+              </div>
+              <div v-if="sidebar.type === 'ai' && sidebar.hasResult" class="analysis-result-meta">
+                <span v-if="sidebar.resultMode" class="analysis-result-mode">
+                  最后成功结果 · {{ analysisModeLabel(sidebar.resultMode) }}
+                </span>
+                <span v-else class="analysis-result-mode">历史结果 · 归属信息不可确认</span>
+                <p v-if="sidebar.resultMode === 'GOAL'">
+                  <strong>结果目标：</strong>{{ sidebar.resultGoal }}
                 </p>
               </div>
               <div v-if="sidebar.loading" class="loading-state"><div class="quantum-loader small"></div><p>数据流处理中...</p></div>
@@ -432,7 +446,12 @@ const sidebar = ref({
   statusText: '',
   statusTone: '',
   analysisMode: '',
-  analysisGoal: ''
+  analysisGoal: '',
+  analysisStatus: '',
+  analysisError: '',
+  resultMode: '',
+  resultGoal: '',
+  hasResult: false
 })
 const currentUser = ref(null)
 const showAuthModal = ref(false)
@@ -966,6 +985,14 @@ const persistedAnalysisGoal = (item) => (
   persistedAnalysisMode(item) === 'GOAL' ? (item?.analysisGoal || '').trim() : ''
 )
 
+const persistedResultMode = (item) => (
+  item?.resultMode === 'GOAL' || item?.resultMode === 'FULL' ? item.resultMode : ''
+)
+
+const persistedResultGoal = (item) => (
+  persistedResultMode(item) === 'GOAL' ? (item?.resultGoal || '').trim() : ''
+)
+
 const syncAnalysisDrafts = (items) => {
   const next = {}
   items.forEach(item => {
@@ -984,18 +1011,32 @@ const setAnalysisMode = (id, mode) => {
   draft.mode = mode === 'GOAL' ? 'GOAL' : 'FULL'
 }
 
-const setSidebarAnalysis = (mode, goal = '') => {
+const setSidebarTask = (mode, goal = '', status = '', error = '') => {
   sidebar.value.analysisMode = mode === 'GOAL' ? 'GOAL' : 'FULL'
   sidebar.value.analysisGoal = sidebar.value.analysisMode === 'GOAL' ? goal.trim() : ''
+  sidebar.value.analysisStatus = status
+  sidebar.value.analysisError = error || ''
+}
+
+const setSidebarResultFromItem = (item) => {
+  sidebar.value.hasResult = Boolean(displayableAiSummary(item))
+  sidebar.value.resultMode = persistedResultMode(item)
+  sidebar.value.resultGoal = persistedResultGoal(item)
 }
 
 const setSidebarAnalysisFromItem = (item) => {
-  setSidebarAnalysis(persistedAnalysisMode(item), persistedAnalysisGoal(item))
+  setSidebarTask(
+      persistedAnalysisMode(item),
+      persistedAnalysisGoal(item),
+      effectiveAnalysisStatus(item),
+      item?.analysisError || '')
+  setSidebarResultFromItem(item)
 }
 
 const isSameAnalysisSelection = (item, mode, goal) => (
-  persistedAnalysisMode(item) === mode
-  && (mode === 'FULL' || persistedAnalysisGoal(item) === goal)
+  Boolean(item?.resultRequestId)
+  && persistedResultMode(item) === mode
+  && (mode === 'FULL' || persistedResultGoal(item) === goal)
 )
 
 const effectiveAnalysisStatus = (item) => {
@@ -1007,13 +1048,16 @@ const effectiveAnalysisStatus = (item) => {
 
 const isAnalysisRunning = (item) => ['QUEUED', 'RUNNING'].includes(effectiveAnalysisStatus(item))
 
-const analysisStatusLabel = (item) => ({
+const analysisStatusText = (status) => ({
   NOT_STARTED: '未分析',
   QUEUED: '排队中',
   RUNNING: '分析中',
   SUCCESS: '已完成',
-  FAILED: '分析失败'
-}[effectiveAnalysisStatus(item)] || '未分析')
+  FAILED: '分析失败',
+  SUBMITTING: '提交中'
+}[status] || '未分析')
+
+const analysisStatusLabel = (item) => analysisStatusText(effectiveAnalysisStatus(item))
 
 const analysisStatusClass = (item) => effectiveAnalysisStatus(item).toLowerCase()
 
@@ -1028,7 +1072,10 @@ const setAnalysisNotice = (status, reanalysis = false, error = '') => {
     sidebar.value.statusText = 'AI 分析已完成。'
     sidebar.value.statusTone = 'success'
   } else if (status === 'FAILED') {
-    sidebar.value.statusText = error ? `分析失败：${error}` : '分析失败；已有旧结果不会被覆盖。'
+    const preservedResult = reanalysis ? ' 当前展示上一次成功结果。' : ''
+    sidebar.value.statusText = error
+        ? `分析失败：${error}${preservedResult}`
+        : `分析失败。${preservedResult}`
     sidebar.value.statusTone = 'error'
   } else {
     sidebar.value.statusText = ''
@@ -1067,7 +1114,7 @@ const aiAnalyze = async (id, force = false) => {
 
   // 只有模式和规范化目标都一致时，才在前端直接展示已有成功结果。
   if (!force && existingSummary && currentStatus === 'SUCCESS' && sameSelection) {
-    openSidebar('ai', analysisModeLabel(requestedMode), id)
+    openSidebar('ai', 'AI 分析', id)
     setSidebarAnalysisFromItem(item)
     sidebar.value.content = existingSummary
     sidebar.value.loading = false
@@ -1077,7 +1124,7 @@ const aiAnalyze = async (id, force = false) => {
 
   // 持久化状态是 QUEUED/RUNNING 时不重复提交；有旧结果则继续展示旧结果。
   if (isAnalysisRunning(item) || (pollingTimers.value[id] && pollingTimers.value[id].type === 'ai')) {
-    openSidebar('ai', analysisModeLabel(persistedAnalysisMode(item)), id)
+    openSidebar('ai', 'AI 分析', id)
     setSidebarAnalysisFromItem(item)
     sidebar.value.content = existingSummary
     sidebar.value.loading = !sidebar.value.content
@@ -1086,13 +1133,13 @@ const aiAnalyze = async (id, force = false) => {
     return
   }
 
-  // 失败后仅在选择仍相同时展示旧结果；改变模式或目标会直接创建新任务。
+  // 最近任务失败后，只有选择命中最后成功结果时才直接展示旧结果。
   if (!force && existingSummary && sameSelection) {
-    openSidebar('ai', analysisModeLabel(requestedMode), id)
+    openSidebar('ai', 'AI 分析', id)
     setSidebarAnalysisFromItem(item)
     sidebar.value.content = existingSummary
     sidebar.value.loading = false
-    setAnalysisNotice(currentStatus, false, item.analysisError)
+    setAnalysisNotice(currentStatus, true, item.analysisError)
     return
   }
 
@@ -1107,11 +1154,12 @@ const aiAnalyze = async (id, force = false) => {
 
   // 3. 准备提交请求，打开侧边栏loading
   setAnalysisSubmitting(id, true)
-  openSidebar('ai', analysisModeLabel(requestedMode), id)
-  setSidebarAnalysis(requestedMode, requestedGoal)
+  openSidebar('ai', 'AI 分析', id)
+  setSidebarAnalysisFromItem(item)
+  setSidebarTask(requestedMode, requestedGoal, 'SUBMITTING')
   sidebar.value.content = existingSummary
   sidebar.value.loading = !sidebar.value.content
-  sidebar.value.statusText = force && sidebar.value.content
+  sidebar.value.statusText = sidebar.value.content
       ? '正在提交重新分析任务，当前展示上一次结果。'
       : '正在提交正式分析任务。'
   sidebar.value.statusTone = 'running'
@@ -1181,7 +1229,11 @@ const aiAnalyze = async (id, force = false) => {
         setSidebarAnalysisFromItem(reusedItem)
         sidebar.value.content = displayableAiSummary(reusedItem) || existingSummary
         sidebar.value.loading = false
-        setAnalysisNotice('SUCCESS')
+        const reusedStatus = effectiveAnalysisStatus(reusedItem)
+        setAnalysisNotice(
+            reusedStatus,
+            Boolean(sidebar.value.content) && reusedStatus === 'FAILED',
+            reusedItem?.analysisError)
       }
       showMsg('已复用现有分析结果')
       return
@@ -1189,12 +1241,18 @@ const aiAnalyze = async (id, force = false) => {
       const duplicateMessage = responseMessage || 'Analysis task is already running'
       showMsg(`⚠️ ${duplicateMessage}`, true)
       if (isCurrentAnalysisSidebar()) {
+        setSidebarTask(
+            data?.analysisMode || requestedMode,
+            data?.analysisGoal || requestedGoal,
+            data?.analysisStatus || 'RUNNING',
+            data?.analysisError)
         setAnalysisNotice('RUNNING', Boolean(sidebar.value.content))
       }
     } else {
       showMsg('✅ 任务已提交')
       if (isCurrentAnalysisSidebar()) {
-        setAnalysisNotice('QUEUED', force && Boolean(sidebar.value.content))
+        setSidebarTask(requestedMode, requestedGoal, 'QUEUED')
+        setAnalysisNotice('QUEUED', Boolean(sidebar.value.content))
       }
     }
     startPolling(id, 'ai')
@@ -1295,7 +1353,7 @@ const startPolling = (id, type) => {
         if (type === 'ai') {
           setSidebarAnalysisFromItem(item)
           const status = effectiveAnalysisStatus(item)
-          setAnalysisNotice(status, false, item.analysisError)
+          setAnalysisNotice(status, Boolean(result) && status === 'FAILED', item.analysisError)
         }
       }
 
@@ -1343,6 +1401,11 @@ const openSidebar = (type, title, mediaId = null) => {
   sidebar.value.statusTone = ''
   sidebar.value.analysisMode = ''
   sidebar.value.analysisGoal = ''
+  sidebar.value.analysisStatus = ''
+  sidebar.value.analysisError = ''
+  sidebar.value.resultMode = ''
+  sidebar.value.resultGoal = ''
+  sidebar.value.hasResult = false
 }
 const closeSidebar = () => { sidebar.value.visible = false }
 
@@ -1678,6 +1741,17 @@ html, body, #app {
 .close-btn { background: none; border: none; color: var(--text-sub); padding: 5px; cursor: pointer; transition: color 0.3s; }
 .close-btn:hover { color: var(--accent-lime); }
 .sidebar-body { flex: 1; overflow-y: auto; padding: 30px; }
+.analysis-task-meta {
+  margin-bottom: 14px; padding: 12px; border: 1px solid rgba(124, 58, 237, 0.55);
+  border-radius: 8px; background: rgba(124, 58, 237, 0.06);
+}
+.analysis-task-label {
+  display: inline-block; color: var(--accent-purple); font-size: 0.78rem;
+  font-weight: 800; letter-spacing: 0.04em;
+}
+.analysis-task-meta p { margin: 8px 0 0; color: var(--text-sub); line-height: 1.6; overflow-wrap: anywhere; }
+.analysis-task-meta strong { color: var(--text-main); }
+.analysis-task-meta .analysis-task-error { color: #ff8b96; }
 .analysis-result-meta {
   margin-bottom: 14px; padding: 12px; border: 1px solid var(--border-tech);
   border-radius: 8px; background: rgba(34, 211, 238, 0.06);

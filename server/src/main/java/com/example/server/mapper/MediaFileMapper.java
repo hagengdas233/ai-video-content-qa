@@ -53,6 +53,10 @@ public interface MediaFileMapper extends BaseMapper<MediaFile> {
             UPDATE media_files
             SET transcript_text = #{transcriptText,jdbcType=LONGVARCHAR},
                 ai_summary = #{aiSummary,jdbcType=LONGVARCHAR},
+                result_request_id = #{analysisRequestId},
+                result_mode = #{analysisMode,jdbcType=VARCHAR},
+                result_goal = #{analysisGoal,jdbcType=VARCHAR},
+                result_finished_at = #{finishedAt},
                 analysis_status = 'SUCCESS',
                 analysis_error = NULL,
                 analysis_finished_at = #{finishedAt}
@@ -62,6 +66,8 @@ public interface MediaFileMapper extends BaseMapper<MediaFile> {
             """)
     int markAnalysisSuccess(@Param("mediaId") Long mediaId,
                             @Param("analysisRequestId") String analysisRequestId,
+                            @Param("analysisMode") AnalysisMode analysisMode,
+                            @Param("analysisGoal") String analysisGoal,
                             @Param("transcriptText") String transcriptText,
                             @Param("aiSummary") String aiSummary,
                             @Param("finishedAt") LocalDateTime finishedAt);

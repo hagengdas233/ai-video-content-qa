@@ -34,6 +34,13 @@ CREATE TABLE IF NOT EXISTS `media_files` (
   `analysis_error` varchar(1000) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Most recent analysis error',
   `analysis_started_at` datetime DEFAULT NULL COMMENT 'Current analysis start time',
   `analysis_finished_at` datetime DEFAULT NULL COMMENT 'Current analysis finish time',
+  `result_request_id` char(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL
+    COMMENT 'Request UUID that produced the current successful result',
+  `result_mode` varchar(10) COLLATE utf8mb4_unicode_ci DEFAULT NULL
+    COMMENT 'Mode that produced the current successful result',
+  `result_goal` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL
+    COMMENT 'Goal that produced the current successful result',
+  `result_finished_at` datetime DEFAULT NULL COMMENT 'Current successful result completion time',
   `cover_url` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Cover URL',
   `upload_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT 'Upload time',
   PRIMARY KEY (`id`),
@@ -46,6 +53,8 @@ CREATE TABLE IF NOT EXISTS `media_files` (
     CHECK (`analysis_status` IN ('NOT_STARTED', 'QUEUED', 'RUNNING', 'SUCCESS', 'FAILED')),
   CONSTRAINT `chk_media_files_analysis_mode`
     CHECK (`analysis_mode` IN ('FULL', 'GOAL')),
+  CONSTRAINT `chk_media_files_result_mode`
+    CHECK (`result_mode` IS NULL OR `result_mode` IN ('FULL', 'GOAL')),
   CONSTRAINT `fk_media_files_user_id`
     FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
     ON DELETE SET NULL

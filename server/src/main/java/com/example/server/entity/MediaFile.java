@@ -33,6 +33,11 @@ public class MediaFile {
     private LocalDateTime analysisStartedAt;
     private LocalDateTime analysisFinishedAt;
 
+    private String resultRequestId;
+    private AnalysisMode resultMode;
+    private String resultGoal;
+    private LocalDateTime resultFinishedAt;
+
     //【修改点】删掉了 @TableField(fill = ...) 注解
     //上传时间由数据库自动记录，Java 不插手，防止报错
     private LocalDateTime uploadTime;

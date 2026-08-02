@@ -41,6 +41,7 @@ class VideoAnalysisConsumerTest {
     private static final String HASH = "0123456789abcdef0123456789abcdef";
     private static final String REQUEST_ID = "11111111-1111-4111-8111-111111111111";
     private static final String NEW_REQUEST_ID = "22222222-2222-4222-8222-222222222222";
+    private static final String RESULT_REQUEST_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
     @Mock
     private AiService aiService;
@@ -83,7 +84,8 @@ class VideoAnalysisConsumerTest {
         when(aiService.analyze(1L, AnalysisMode.GOAL, "goal"))
                 .thenReturn(new AiAnalysisOutput("new transcript", noMatchSummary));
         when(mediaFileMapper.markAnalysisSuccess(
-                eq(1L), eq(REQUEST_ID), eq("new transcript"), eq(noMatchSummary), any(LocalDateTime.class)))
+                eq(1L), eq(REQUEST_ID), eq(AnalysisMode.GOAL), eq("goal"),
+                eq("new transcript"), eq(noMatchSummary), any(LocalDateTime.class)))
                 .thenReturn(1);
 
         consumer.onMessage(message(REQUEST_ID));
@@ -92,12 +94,14 @@ class VideoAnalysisConsumerTest {
                 aiService, mediaFileMapper, activeKeyService, lock);
         completionOrder.verify(aiService).analyze(1L, AnalysisMode.GOAL, "goal");
         completionOrder.verify(mediaFileMapper).markAnalysisSuccess(
-                eq(1L), eq(REQUEST_ID), eq("new transcript"), eq(noMatchSummary), any(LocalDateTime.class));
+                eq(1L), eq(REQUEST_ID), eq(AnalysisMode.GOAL), eq("goal"),
+                eq("new transcript"), eq(noMatchSummary), any(LocalDateTime.class));
         completionOrder.verify(activeKeyService)
                 .deleteIfOwned(AnalysisRedisKeys.active(7L, HASH), REQUEST_ID);
         completionOrder.verify(lock).unlock();
         verify(mediaFileMapper, never()).markExecutionFailed(any(), any(), any(), any());
         assertEquals("## old result", file.getAiSummary());
+        assertEquals(RESULT_REQUEST_ID, file.getResultRequestId());
     }
 
     @Test
@@ -110,12 +114,13 @@ class VideoAnalysisConsumerTest {
 
         verify(aiService, never()).analyze(any(), any(), any());
         verify(mediaFileMapper, never()).markAnalysisRunning(any(), any(), any());
-        verify(mediaFileMapper, never()).markAnalysisSuccess(any(), any(), any(), any(), any());
+        verify(mediaFileMapper, never()).markAnalysisSuccess(
+                any(), any(), any(), any(), any(), any(), any());
         verify(activeKeyService).deleteIfOwned(AnalysisRedisKeys.active(7L, HASH), REQUEST_ID);
     }
 
     @Test
-    void staleMessageWithDifferentRequestIdDoesNotRunAiOrChangeCurrentState() throws Exception {
+    void lateMessageForOldRequestCannotOverwriteCurrentResult() throws Exception {
         MediaFile file = media(AnalysisStatus.QUEUED, NEW_REQUEST_ID, "## old result");
         stubOwnedLock();
         when(mediaFileMapper.selectById(1L)).thenReturn(file);
@@ -124,9 +129,13 @@ class VideoAnalysisConsumerTest {
 
         verify(aiService, never()).analyze(any(), any(), any());
         verify(mediaFileMapper, never()).markAnalysisRunning(any(), any(), any());
-        verify(mediaFileMapper, never()).markAnalysisSuccess(any(), any(), any(), any(), any());
+        verify(mediaFileMapper, never()).markAnalysisSuccess(
+                any(), any(), any(), any(), any(), any(), any());
         verify(mediaFileMapper, never()).markExecutionFailed(any(), any(), any(), any());
         verify(activeKeyService).deleteIfOwned(AnalysisRedisKeys.active(7L, HASH), REQUEST_ID);
+        assertEquals("## old result", file.getAiSummary());
+        assertEquals(RESULT_REQUEST_ID, file.getResultRequestId());
+        assertEquals("goal A", file.getResultGoal());
     }
 
     @Test
@@ -141,7 +150,7 @@ class VideoAnalysisConsumerTest {
     }
 
     @Test
-    void analysisFailureMarksCurrentRequestFailedAndPreservesOldSummary() throws Exception {
+    void analysisBFailureMarksCurrentRequestFailedAndPreservesSuccessfulAResult() throws Exception {
         MediaFile file = media(AnalysisStatus.QUEUED, REQUEST_ID, "## old result");
         stubOwnedLock();
         when(mediaFileMapper.selectById(1L)).thenReturn(file);
@@ -154,8 +163,12 @@ class VideoAnalysisConsumerTest {
 
         verify(mediaFileMapper).markExecutionFailed(
                 eq(1L), eq(REQUEST_ID), eq("provider unavailable"), any(LocalDateTime.class));
-        verify(mediaFileMapper, never()).markAnalysisSuccess(any(), any(), any(), any(), any());
+        verify(mediaFileMapper, never()).markAnalysisSuccess(
+                any(), any(), any(), any(), any(), any(), any());
         assertEquals("## old result", file.getAiSummary());
+        assertEquals(RESULT_REQUEST_ID, file.getResultRequestId());
+        assertEquals(AnalysisMode.GOAL, file.getResultMode());
+        assertEquals("goal A", file.getResultGoal());
         verify(activeKeyService).deleteIfOwned(AnalysisRedisKeys.active(7L, HASH), REQUEST_ID);
     }
 
@@ -203,6 +216,11 @@ class VideoAnalysisConsumerTest {
         file.setAnalysisStatus(status);
         file.setAnalysisRequestId(requestId);
         file.setAiSummary(aiSummary);
+        if (aiSummary != null) {
+            file.setResultRequestId(RESULT_REQUEST_ID);
+            file.setResultMode(AnalysisMode.GOAL);
+            file.setResultGoal("goal A");
+        }
         return file;
     }
 
